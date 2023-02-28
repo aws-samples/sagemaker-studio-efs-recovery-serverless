@@ -8,7 +8,7 @@ This pattern shows how to back up and recover users' work in Amazon SageMaker St
 ***
 In case, the users and domain are accidentally deleted, [the Amazon EFS volume is detached but not deleted](https://docs.aws.amazon.com/sagemaker/latest/dg/gs-studio-delete-domain.html). A possible scenario is that we may want to revert the deletion by recreating a new domain and new user profiles. If the same users are being onboarded again, they may wish to access the files from their respective workspace in the detached volume. The following diagram illustrates the high-level workflow of Studio Domain backup and recovery with an event-driven architecture.
 
-![architecture](backup_sagemaker_studio_efs_recovery_serverless/images/architecture.png)
+![architecture](images/architecture.png)
 
 The event-driven app includes the following steps:
 1.	Amazon CloudWatch Events Rule uses AWS CloudTrail to track the CreateUserProfile API call, trigger the rule and invoke the AWS Lambda Function.
@@ -19,7 +19,7 @@ The event-driven app includes the following steps:
 The backup and recovery workflow includes the following steps:
 5.	The backup and recovery workflow consists of the AWS Step Functions, which is integrated with other AWS services including AWS DataSync, to orchestrate the recovery of the user files from the detached private home directory to a new directory in Studio Domain EFS. With The Step Functions Workflow Studio, the workflow can be implemented with a no-code, such as in this case, or a low-code for a more customized solution. The Step Function is invoked when the user profile creation event is detected by the event-driven app.
 6.	For each user, the Step Functions execute the DataSync task to copy all files from their respective home directories in the detached volume to the new directory. The image below is the actual graph of the Step Functions.
-![Step Functions Graph](backup_sagemaker_studio_efs_recovery_serverless/images/stepfunctions_graph.png)
+![Step Functions Graph](images/stepfunctions_graph.png)
 7. When the users open their Studio, all of the files from respective directories in detached volume will be available to themselves.
 
 ## Tools and Services
@@ -89,10 +89,10 @@ The backup and recovery workflow includes the following steps:
 
 | Scripts | Description |
 | --- | --- |
-| `seed-table.py` | This script is only used if DDBInitialSeed is set to [ENABLE](backup_sagemaker_studio_efs_recovery_serverless/template.yaml). It lists the current Studio UserProfiles and seeds the DynamoDB tables with the user metadata |
+| `seed-table.py` | This script is only used if DDBInitialSeed is set to [ENABLE](template.yaml). It lists the current Studio UserProfiles and seeds the DynamoDB tables with the user metadata |
 | `event-processor.py` | Process the `CreateUserProfile Event` from CloudWatch Event Rule, update the user table, and put an item in the history table |
 | `ddb-stream-processor.py` | Process the `Update Event` from the DynamoDB stream and invokes the Step Functions with the Studio EFS recovery input  |
-| `add-security-group.py` | This script is invoked when [SageMaker Domain CloudFormation](backup_sagemaker_studio_efs_recovery_serverless/Infrastructure/Templates/sagemaker-studio-domain.yaml) is deployed. The script updates the Security Groups for Home EFS. For DataSync Task to copy files between EFS, we need to update the Security Groups according to [the Documentation](https://docs.aws.amazon.com/datasync/latest/userguide/create-efs-location.html). Therefore, the script will update the Security Group of the specified EFS by allowing inbounds from the DataSync Security Group as a source using Port 2049.
+| `add-security-group.py` | This script is invoked when [SageMaker Domain CloudFormation](Infrastructure/Templates/sagemaker-studio-domain.yaml) is deployed. The script updates the Security Groups for Home EFS. For DataSync Task to copy files between EFS, we need to update the Security Groups according to [the Documentation](https://docs.aws.amazon.com/datasync/latest/userguide/create-efs-location.html). Therefore, the script will update the Security Group of the specified EFS by allowing inbounds from the DataSync Security Group as a source using Port 2049.
 
 ## Testing - Scenario I (Create a New SageMaker Studio Domain)
 ***
@@ -109,7 +109,7 @@ Scenario I deploys all stacks, including the backup and recovery module, event-d
       4. `<stack_name>-StudioDomain-*`
       5. `<stack_name>-StudioUser1-*`
       6. `<stack_name>-StudioUser2-*`
-      ![CloudFomration Console](backup_sagemaker_studio_efs_recovery_serverless/images/stack-create-complete.png)
+      ![CloudFomration Console](images/stack-create-complete.png)
    2. If the deployment failed in any of the stacks, check the error and resolve the issues. Then, proceed to the next step only if the problems are resolved.
    3. In [Amazon DynamoDB Console](https://console.aws.amazon.com/dynamodbv2/home), select **Tables** and confirm that `studioUser` and `studioUserHistory` tables are created.
       1. From **Table**, select `studioUser` and select **Explore table items** to confirm that items for `user1` and `user2` are populated in the table.
@@ -123,7 +123,7 @@ Scenario I deploys all stacks, including the backup and recovery module, event-d
         ```bash
         echo "i don't want to lose access to this file" > user1.txt
         ```
-4. Delete Studio User `user1` by removing the nested stack from the parent. Comment out the below code blocks in [template.yaml](backup_sagemaker_studio_efs_recovery_serverless/template.yaml) and save the file:
+4. Delete Studio User `user1` by removing the nested stack from the parent. Comment out the below code blocks in [template.yaml](template.yaml) and save the file:
     ```bash
      StudioUser1:
        Type: AWS::Serverless::Application
@@ -148,10 +148,10 @@ Scenario I deploys all stacks, including the backup and recovery module, event-d
    1. In [AWS CloudFormation Console](https://console.aws.amazon.com/cloudformation/home), select the stack `<stack_name>-stepfunction-stack`.
    2. In the stack, select **Physical ID** of `StepFunction` under **Resources** section
    3. Select the most recent execution and confirm the execution status in **Graph view**. It should look like this:
-   ![architecture](backup_sagemaker_studio_efs_recovery_serverless/images/stepfunctions_graph_success.png)
+   ![architecture](images/stepfunctions_graph_success.png)
 7. If you have completed step 2, open the Studio for `user1` and confirm that the `user1.txt` file is copied to the newly created directory.
 8. In [AWS DataSync Console](https://console.aws.amazon.com/datasync/home), select the most recent Task ID. Select **History** and the most recent **Execution ID**. This is another way to inspect the configurations and the execution status of the DataSync task. 
-   ![DataSync Console](backup_sagemaker_studio_efs_recovery_serverless/images/data-sync.png)
+   ![DataSync Console](images/data-sync.png)
 9. If you wish, you can delete and recreate the Studio Domain and UserProfiles for additional testing.
 10. End of the steps
 
@@ -175,7 +175,7 @@ Scenario II assumes you want to use the existing SageMaker Domain and UserProfil
       2. In the stack, select **Physical ID** of `DDBSeedLambda` under **Resources** section
       3. Select **View CloudWatch logs** under **Monitor** section, and then check the logs from the most recent execution to troubleshoot.
 4. Update the EFS Security Group.
-   1. Get the `SecurityGroupId.` We will use the Security Group created in [the CloudFormation Template](backup_sagemaker_studio_efs_recovery_serverless/Infrastructure/Templates/ssm.yaml), which allows `ALL Traffic` in the Outbound Connection as a source and target for DataSync. To run the following command, you need to specify `aws_region.`
+   1. Get the `SecurityGroupId.` We will use the Security Group created in [the CloudFormation Template](Infrastructure/Templates/ssm.yaml), which allows `ALL Traffic` in the Outbound Connection as a source and target for DataSync. To run the following command, you need to specify `aws_region.`
       ```bash
       echo "SecurityGroupId:" $(aws ssm get-parameter --name /network/vpc/sagemaker/securitygroups --region <aws_region> --query 'Parameter.Value')
       ```
@@ -193,7 +193,7 @@ Scenario II assumes you want to use the existing SageMaker Domain and UserProfil
 ## Testing - Scenario III (Backup and Recovery Workflow without automation)
 ***
 Scenario III assumes you want to test the backup and recovery workflow without a full automation using the event-driven app.
-   1. Comment out the below code blocks in [template.yaml](backup_sagemaker_studio_efs_recovery_serverless/template.yaml) and save the file:
+   1. Comment out the below code blocks in [template.yaml](template.yaml) and save the file:
       ```bash
        EventApp:
        Type: AWS::Serverless::Application
@@ -249,7 +249,7 @@ Scenario III assumes you want to test the backup and recovery workflow without a
       ```bash
       echo "SubnetId:" $(aws sagemaker describe-domain --domain-id <domain_id> --region <aws_region> --query 'SubnetIds[0]')    
       ```
-      2. Get the `SecurityGroupId`. We will use the Security Group created in [the CloudFormation Template](backup_sagemaker_studio_efs_recovery_serverless/Infrastructure/Templates/ssm.yaml). To run the following command, you need to specify `aws_region.`
+      2. Get the `SecurityGroupId`. We will use the Security Group created in [the CloudFormation Template](Infrastructure/Templates/ssm.yaml). To run the following command, you need to specify `aws_region.`
       ```bash
       echo "SecurityGroupId:" $(aws ssm get-parameter --name /network/vpc/sagemaker/securitygroups --region <aws_region> --query 'Parameter.Value')
       ```
