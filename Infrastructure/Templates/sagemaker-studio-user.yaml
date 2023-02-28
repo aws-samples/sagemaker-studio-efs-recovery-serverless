@@ -1,0 +1,604 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: AWS CloudFormation Template for SageMaker UserProfile
+
+Parameters:
+#  LambdaLayerArn:
+#    Description: Lambda Layer Arn
+#    Type: String
+  VpcId:
+    Description: VPCId of existing Virtual Private Cloud
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /network/vpc/app/vpcid
+  StudioUserProfileName:
+    Description: Studio user profile name
+    Type: String
+    Default: user1
+  DataScienceAppInstanceType:
+    Description: InstanceType for KernelGateway data science app. the system value is translated to ml.t3.medium.
+    Type: String
+    Default: ml.t3.medium
+    AllowedValues:
+      - ml.c5.12xlarge
+      - ml.c5.18xlarge
+      - ml.c5.24xlarge
+      - ml.c5.2xlarge
+      - ml.c5.4xlarge
+      - ml.c5.9xlarge
+      - ml.c5.large
+      - ml.c5.xlarge
+      - ml.g4dn.12xlarge
+      - ml.g4dn.16xlarge
+      - ml.g4dn.2xlarge
+      - ml.g4dn.4xlarge
+      - ml.g4dn.8xlarge
+      - ml.g4dn.xlarge
+      - ml.g5.12xlarge
+      - ml.g5.16xlarge
+      - ml.g5.24xlarge
+      - ml.g5.2xlarge
+      - ml.g5.48xlarge
+      - ml.g5.4xlarge
+      - ml.g5.8xlarge
+      - ml.g5.xlarge
+      - ml.m5.12xlarge
+      - ml.m5.16xlarge
+      - ml.m5.24xlarge
+      - ml.m5.2xlarge
+      - ml.m5.4xlarge
+      - ml.m5.8xlarge
+      - ml.m5.large
+      - ml.m5.xlarge
+      - ml.m5d.12xlarge
+      - ml.m5d.16xlarge
+      - ml.m5d.24xlarge
+      - ml.m5d.2xlarge
+      - ml.m5d.4xlarge
+      - ml.m5d.8xlarge
+      - ml.m5d.large
+      - ml.m5d.xlarge
+      - ml.p3.16xlarge
+      - ml.p3.2xlarge
+      - ml.p3.8xlarge
+      - ml.p3dn.24xlarge
+      - ml.r5.12xlarge
+      - ml.r5.16xlarge
+      - ml.r5.24xlarge
+      - ml.r5.2xlarge
+      - ml.r5.4xlarge
+      - ml.r5.8xlarge
+      - ml.r5.large
+      - ml.r5.xlarge
+      - ml.t3.2xlarge
+      - ml.t3.large
+      - ml.t3.medium
+      - ml.t3.micro
+      - ml.t3.small
+      - ml.t3.xlarge
+      - system
+  SageMakerDomainId:
+    Description: SageMaker Studio Domain Id
+    Type: AWS::SSM::Parameter::Value<String>
+    ConstraintDescription: must be an existing studio domain id in the account.
+    Default: /app/sagemaker/domainid
+  SubnetId1:
+    Description: SubnetId1 of an existing subnet in the VPC
+    Type: AWS::SSM::Parameter::Value<String>
+    ConstraintDescription: must be an existing subnets in the VPC.
+    Default: /network/vpc/app/subnet1
+  SageMakerSecurityGroupId:
+    Description: SageMaker SecurityGroupId of an existing subnet in the VPC
+    Type: AWS::SSM::Parameter::Value<String>
+    ConstraintDescription: must be an existing security groups in the VPC.
+    Default: /network/vpc/sagemaker/securitygroups
+#  LambdaSecurityGroupId:
+#    Description: Lambda SecurityGroupId of an existing subnet in the VPC
+#    Type: AWS::SSM::Parameter::Value<String>
+#    ConstraintDescription: must be an existing security groups in the VPC.
+#    Default: /network/vpc/lambda/securitygroups
+  StartKernelGatewayApps:
+    Type: String
+    Description: Start the KernelGateway Apps (Data Science)
+    AllowedValues:
+      - 'YES'
+      - 'NO'
+    Default: 'YES'
+  ############### Tagging Parameters ####################
+  UID:
+    Type: String
+    Description: Universal Identifier
+    MinLength: 3
+    MaxLength: 10
+    Default: demo
+  Env:
+    Type: String
+    Description: Env instance of the resource
+    AllowedValues:
+      - dev
+      - qa
+      - prd
+    Default: dev
+  AppName:
+    Type: String
+    MaxLength: 25
+    MinLength: 3
+    AllowedPattern: "[a-z][a-z0-9+-=._:/@]*[a-z0-9]"
+    ConstraintDescription: Must begin with a lowercase letter and contain only lowercase alphanumeric characters with +-=._:/@
+    Description: Name of the application, keep to 15 characters or less
+    Default: test-app
+Conditions:
+  KernelGatewayAppsCondition: !Equals [ !Ref StartKernelGatewayApps, 'YES' ]
+  NoKernelGatewayAppsCondition: !Equals [ !Ref StartKernelGatewayApps, 'NO' ]
+Mappings:
+  RegionMap:
+    us-east-1:
+      datascience: "arn:aws:sagemaker:us-east-1:081325390199:image/datascience-1.0"
+      datawrangler: "arn:aws:sagemaker:us-east-1:663277389841:image/sagemaker-data-wrangler-1.0"
+    us-east-2:
+      datascience: "arn:aws:sagemaker:us-east-2:429704687514:image/datascience-1.0"
+      datawrangler: "arn:aws:sagemaker:us-east-2:415577184552:image/sagemaker-data-wrangler-1.0"
+    us-west-1:
+      datascience: "arn:aws:sagemaker:us-west-1:742091327244:image/datascience-1.0"
+      datawrangler: "arn:aws:sagemaker:us-west-1:926135532090:image/sagemaker-data-wrangler-1.0"
+    us-west-2:
+      datascience: "arn:aws:sagemaker:us-west-2:236514542706:image/datascience-1.0"
+      datawrangler: "arn:aws:sagemaker:us-west-2:174368400705:image/sagemaker-data-wrangler-1.0"
+    af-south-1:
+      datascience: "arn:aws:sagemaker:af-south-1:559312083959:image/datascience-1.0"
+      datawrangler: "arn:aws:sagemaker:af-south-1:143210264188:image/sagemaker-data-wrangler-1.0"
+    ap-east-1:
+      datascience: "arn:aws:sagemaker:ap-east-1:493642496378:image/datascience-1.0"
+      datawrangler: "arn:aws:sagemaker:ap-east-1:707077482487:image/sagemaker-data-wrangler-1.0"
+    ap-south-1:
+      datascience: "arn:aws:sagemaker:ap-south-1:394103062818:image/datascience-1.0"
+      datawrangler: "arn:aws:sagemaker:ap-south-1:089933028263:image/sagemaker-data-wrangler-1.0"
+    ap-northeast-2:
+      datascience: "arn:aws:sagemaker:ap-northeast-2:806072073708:image/datascience-1.0"
+      datawrangler: "arn:aws:sagemaker:ap-northeast-2:131546521161:image/sagemaker-data-wrangler-1.0"
+    ap-southeast-1:
+      datascience: "arn:aws:sagemaker:ap-southeast-1:492261229750:image/datascience-1.0"
+      datawrangler: "arn:aws:sagemaker:ap-southeast-1:119527597002:image/sagemaker-data-wrangler-1.0"
+    ap-southeast-2:
+      datascience: "arn:aws:sagemaker:ap-southeast-2:452832661640:image/datascience-1.0"
+      datawrangler: "arn:aws:sagemaker:ap-southeast-2:422173101802:image/sagemaker-data-wrangler-1.0"
+    ap-northeast-1:
+      datascience: "arn:aws:sagemaker:ap-northeast-1:102112518831:image/datascience-1.0"
+      datawrangler: "arn:aws:sagemaker:ap-northeast-1:649008135260:image/sagemaker-data-wrangler-1.0"
+    ca-central-1:
+      datascience: "arn:aws:sagemaker:ca-central-1:310906938811:image/datascience-1.0"
+      datawrangler: "arn:aws:sagemaker:ca-central-1:557239378090:image/sagemaker-data-wrangler-1.0"
+    eu-central-1:
+      datascience: "arn:aws:sagemaker:eu-central-1:936697816551:image/datascience-1.0"
+      datawrangler: "arn:aws:sagemaker:eu-central-1:024640144536:image/sagemaker-data-wrangler-1.0"
+    eu-west-1:
+      datascience: "arn:aws:sagemaker:eu-west-1:470317259841:image/datascience-1.0"
+      datawrangler: "arn:aws:sagemaker:eu-west-1:245179582081:image/sagemaker-data-wrangler-1.0"
+    eu-west-2:
+      datascience: "arn:aws:sagemaker:eu-west-2:712779665605:image/datascience-1.0"
+      datawrangler: "arn:aws:sagemaker:eu-west-2:894491911112:image/sagemaker-data-wrangler-1.0"
+    eu-west-3:
+      datascience: "arn:aws:sagemaker:eu-west-3:615547856133:image/datascience-1.0"
+      datawrangler: "arn:aws:sagemaker:eu-west-3:807237891255:image/sagemaker-data-wrangler-1.0"
+    eu-north-1:
+      datascience: "arn:aws:sagemaker:eu-north-1:243637512696:image/datascience-1.0"
+      datawrangler: "arn:aws:sagemaker:eu-north-1:054986407534:image/sagemaker-data-wrangler-1.0"
+    eu-south-1:
+      datascience: "arn:aws:sagemaker:eu-south-1:488287956546:image/sagemaker-data-wrangler-1.0"
+      datawrangler: "arn:aws:sagemaker:eu-south-1:592751261982:image/datascience-1.0"
+    sa-east-1:
+      datascience: "arn:aws:sagemaker:sa-east-1:782484402741:image/datascience-1.0"
+      datawrangler: "arn:aws:sagemaker:sa-east-1:424196993095:image/sagemaker-data-wrangler-1.0"
+Transform: AWS::Serverless-2016-10-31
+Resources:
+  ############### IAM ####################
+  SageMakerExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - sagemaker.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /service-role/
+      RoleName: !Sub '${UID}-${AppName}-${Env}-sagemaker-${StudioUserProfileName}-role'
+      ManagedPolicyArns:
+        - !Ref SageMakerExecPolicy
+      Tags:
+        - Key: name
+          Value: !Sub '${UID}-${AppName}-${Env}-sagemaker-${StudioUserProfileName}-role'
+        - Key: uid
+          Value: !Ref UID
+        - Key: env
+          Value: !Ref Env
+        - Key: appname
+          Value: !Ref AppName
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: "specifying a name for IAM managed policy without update with interruption is allowed"
+  SageMakerExecPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: "specifying a name for IAM managed policy without update with interruption is allowed"
+    Properties:
+      ManagedPolicyName: !Sub "${UID}-${AppName}-${Env}-sagemaker-${StudioUserProfileName}-policy"
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - ssm:GetParameters
+              - ssm:GetParameter
+            Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/*'
+          - Effect: Allow
+            Action:
+              - sagemaker:CreateEndpointConfig
+            Resource: !Sub 'arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:*'
+          - Sid: SageMakerPipeline
+            Effect: Allow
+            Action:
+              - sagemaker:UpdatePipeline
+              - sagemaker:UpdatePipelineExecution
+              - sagemaker:StartPipelineExecution
+              - sagemaker:RetryPipelineExecution
+              - sagemaker:Create*
+              - sagemaker:Describe*
+              - sagemaker:ListPipeline*
+              - sagemaker:AddTags
+              - sagemaker:ListTags
+              - sagemaker:DeletePipeline
+              - sagemaker:DeleteTags
+            Resource:
+              - !Sub "arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:*/*${UID}*"
+          - Effect: Allow
+            Action:
+              - sagemaker:AssociateTrialComponent
+              - sagemaker:DeleteApp
+              - sagemaker:Describe*
+              - sagemaker:Search
+              - sagemaker:DeleteExperiment
+              - sagemaker:DeleteEndpointConfig
+              - sagemaker:DeleteEndpoint
+              - sagemaker:DeleteModel
+              - sagemaker:DeleteModelPackage
+              - sagemaker:DeleteModelPackageGroup
+              - sagemaker:DeleteTrial
+              - sagemaker:DeleteTrialComponent
+              - sagemaker:StopAutoMLJob
+              - sagemaker:StopHyperParameterTuningJob
+              - sagemaker:StopTransformJob
+              - sagemaker:UpdateEndpoint
+              - sagemaker:UpdateEndpointWeightsAndCapacities
+              - sagemaker:UpdateExperiment
+              - sagemaker:UpdateTrial
+              - sagemaker:UpdateTrialComponent
+              - sagemaker:ListTags
+            Resource: !Sub 'arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:*'
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:DescribeLogStreams
+              - logs:GetLogEvents
+              - logs:PutLogEvents
+            Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/sagemaker/*'
+          - Effect: Allow
+            Action:
+              - sagemaker:List*
+            Resource: !Sub 'arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:*'
+          - Effect: Allow
+            Action:
+              - elasticfilesystem:DescribeFileSystems
+              - elasticfilesystem:DescribeMountTargets
+            Resource: !Sub 'arn:aws:elasticfilesystem:${AWS::Region}:${AWS::AccountId}:*'
+          - Effect: Allow
+            Action:
+              - cloudwatch:GetMetricData
+              - cloudwatch:GetMetricStatistics
+              - cloudwatch:ListMetrics
+              - cloudwatch:PutMetricData
+            Resource: !Sub 'arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:*'
+          - Effect: Allow
+            Action:
+              - cloudwatch:DeleteAlarms
+              - cloudwatch:DescribeAlarms
+              - cloudwatch:PutMetricAlarm
+            Resource: !Sub 'arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarms:${UID}*'
+          - Effect: Allow
+            Action:
+              - ec2:CreateNetworkInterface
+              - ec2:CreateNetworkInterfacePermission
+              - ec2:DeleteNetworkInterface
+              - ec2:DeleteNetworkInterfacePermission
+              - ec2:DescribeDhcpOptions
+              - ec2:DescribeNetworkInterfaces
+              - ec2:DescribeRouteTables
+              - ec2:DescribeSecurityGroups
+              - ec2:DescribeSubnets
+              - ec2:DescribeVpcEndpoints
+              - ec2:DescribeVpcs
+            Resource: !Sub 'arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:*'
+          - Effect: Allow
+            Action:
+              - elastic-inference:Connect
+            Resource: !Sub 'arn:aws:elastic-inference:${AWS::Region}:${AWS::AccountId}:*'
+          - Effect: Allow
+            Action:
+              - iam:ListRoles
+            Resource: !Sub 'arn:*:iam::${AWS::AccountId}:role/*'
+          - Sid: KMSKeyAccess
+            Effect: Allow
+            Action:
+              - kms:CreateGrant
+              - kms:Decrypt
+              - kms:DescribeKey
+              - kms:Encrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:ListAliases
+            Resource: arn:aws:kms:*
+            Condition: {
+              "StringLike": {
+                "kms:RequestAlias": !Sub "alias/${UID}*"
+              }
+            }
+          - Sid: ECRAccess
+            Effect: Allow
+            Action:
+              - ecr:BatchCheckLayerAvailability
+              - ecr:GetDownloadUrlForLayer
+              - ecr:GetRepositoryPolicy
+              - ecr:DescribeRepositorie
+              - ecr:DescribeImages
+              - ecr:ListImages
+              - ecr:BatchGetImage
+              - ecr:GetLifecyclePolicy
+              - ecr:GetLifecyclePolicyPreview
+              - ecr:ListTagsForResource
+              - ecr:DescribeImageScanFindings
+            Resource: !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/*'
+          - Sid: ECRAuthTokenAccess
+            Effect: Allow
+            Action:
+              - ecr:GetAuthorizationToken
+            Resource:
+              - !Sub 'arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:*'
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+              - s3:ListBucket
+            Resource:
+              - !Sub 'arn:aws:s3:::${UID}*'
+              - !Sub 'arn:aws:s3:::${UID}*/*'
+          - Effect: Allow
+            Action:
+              - s3:GetBucketLocation
+              - s3:ListBucket*
+              - s3:ListAllMyBuckets
+            Resource:
+              - !Sub 'arn:aws:s3:::${UID}*'
+          - Effect: Allow
+            Action:
+              - lambda:InvokeFunction
+            Resource:
+              - !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${UID}*'
+          - Action: iam:CreateServiceLinkedRole
+            Effect: Allow
+            Resource: arn:aws:iam::*:role/aws-service-role/sagemaker.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_SageMakerEndpoint
+            Condition:
+              StringLike:
+                'iam:AWSServiceName': sagemaker.application-autoscaling.amazonaws.com
+          - Action: iam:CreateServiceLinkedRole
+            Effect: Allow
+            Resource: arn:aws:iam::*:role/aws-service-role/elasticfilesystem.amazonaws.com/AWSServiceRoleForAmazonElasticFileSystem
+            Condition:
+              StringLike:
+                'iam:AWSServiceName': elasticfilesystem.amazonaws.com
+          - Effect: Allow
+            Action:
+              - sns:Subscribe
+              - sns:CreateTopic
+            Resource:
+              - !Sub 'arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${UID}*'
+          - Effect: Allow
+            Action:
+              - iam:PassRole
+            Resource: !Sub 'arn:*:iam::${AWS::AccountId}:role/*'
+            Condition:
+              StringEquals:
+                'iam:PassedToService':
+                  - sagemaker.amazonaws.com
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /service-role/
+      RoleName: !Sub '${UID}-${AppName}-${Env}--lambda-${StudioUserProfileName}-role'
+      ManagedPolicyArns:
+        - !Ref LambdaExecPolicy
+      Tags:
+        - Key: name
+          Value: !Sub "${UID}-${AppName}-${Env}-lambda-${StudioUserProfileName}-role"
+        - Key: uid
+          Value: !Ref UID
+        - Key: env
+          Value: !Ref Env
+        - Key: appname
+          Value: !Ref AppName
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: "specifying a name for IAM managed policy without update with interruption is allowed"
+  LambdaExecPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: "specifying a name for IAM managed policy without update with interruption is allowed"
+    Properties:
+      ManagedPolicyName: !Sub "${UID}-${AppName}-${Env}-lambda-${StudioUserProfileName}-policy"
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: SagemakerListDescribe
+            Effect: Allow
+            Action:
+              - sagemaker:List*
+              - sagemaker:Describe*
+            Resource: !Sub 'arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:*'
+          - Sid: SagemakerAppDelete
+            Effect: Allow
+            Action:
+              - sagemaker:DeleteApp
+              - servicecatalog:AssociatePrincipalWithPortfolio
+              - sagemaker:DescribeDomain
+            Resource:
+              - !Sub 'arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:domain/*'
+              - !Sub 'arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:app/*/*/kernelgateway/*'
+              - !Sub 'arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:portfolio/*'
+          - Sid: ServiceCatalog
+            Effect: Allow
+            Action:
+              - servicecatalog:ListAcceptedPortfolioShares
+              - sagemaker:EnableSagemakerServicecatalogPortfolio
+              - servicecatalog:AcceptPortfolioShare
+            Resource: '*'
+          - Sid: Logs
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:DescribeLogStreams
+              - logs:GetLogEvents
+              - logs:PutLogEvents
+            Resource: '*'
+          - Sid: CloudWatch
+            Effect: Allow
+            Action:
+              - cloudwatch:GetMetricData
+              - cloudwatch:GetMetricStatistics
+              - cloudwatch:ListMetrics
+              - cloudwatch:PutMetricData
+            Resource: !Sub 'arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:*'
+          - Sid: EC2
+            Effect: Allow
+            Action:
+              - ec2:Describe*
+              - ec2:CreateNetwork*
+              - ec2:DeleteNetwork*
+              - ec2:AttachNetwork*
+            Resource: '*'
+          - Sid: IAM
+            Effect: Allow
+            Action:
+              - iam:GetRole
+              - iam:PassRole
+            Resource: !Sub 'arn:*:iam::${AWS::AccountId}:role/*'
+          - Sid: KMSKeyAccess
+            Effect: Allow
+            Action:
+              - kms:CreateGrant
+              - kms:Decrypt
+              - kms:DescribeKey
+              - kms:Encrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:ListAliases
+            Resource: arn:aws:kms:*
+            Condition: {
+              "StringLike": {
+                "kms:RequestAlias": !Sub "alias/${UID}*"
+              }
+            }
+  ############### SageMaker Userprofile ####################
+  SageMakerUserProfile:
+    Type: AWS::SageMaker::UserProfile
+    Properties:
+      DomainId: !Ref SageMakerDomainId
+      UserProfileName: !Ref StudioUserProfileName
+      UserSettings:
+        SecurityGroups: [!Ref SageMakerSecurityGroupId]
+        ExecutionRole: !GetAtt SageMakerExecutionRole.Arn
+        SharingSettings:
+          NotebookOutputOption: Disabled
+      Tags:
+        - Key: name
+          Value: !Ref StudioUserProfileName
+        - Key: uid
+          Value: !Ref UID
+        - Key: env
+          Value: !Ref Env
+        - Key: appname
+          Value: !Ref AppName
+  JupyterApp:
+    Type: AWS::SageMaker::App
+    DependsOn: SageMakerUserProfile
+    Properties:
+      AppName: default
+      AppType: JupyterServer
+      DomainId: !Ref SageMakerDomainId
+      UserProfileName: !Ref StudioUserProfileName
+      Tags:
+        - Key: name
+          Value: !Ref StudioUserProfileName
+        - Key: uid
+          Value: !Ref UID
+        - Key: env
+          Value: !Ref Env
+        - Key: appname
+          Value: !Ref AppName
+  DeleteKernelGatewayAppsNoKGCondition:
+    Type: Custom::DeleteKernelGatewayApps
+    Condition: NoKernelGatewayAppsCondition
+    DependsOn: SageMakerUserProfile
+    Properties:
+      ServiceToken: !GetAtt DeleteKernelGatewayAppsLambda.Arn
+      DomainId: !Ref SageMakerDomainId
+  DeleteKernelGatewayAppsLambda:
+    Type: AWS::Serverless::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W58
+            reason: "lambda role arn referened in the resource has permission to write CloudWatch Logs"
+    Properties:
+      FunctionName: !Sub '${UID}-${AppName}-${Env}-${StudioUserProfileName}-delete-kernelgateway'
+      ReservedConcurrentExecutions: 1
+#      CodeUri: ../../src/delete-studio-kernel
+      CodeUri: ../../src/
+#      Layers:
+#        - !Ref LambdaLayerArn
+      Description: Delete KernelGateway apps to clean up
+      Handler: delete-kernel-gateway-app.lambda_handler
+      MemorySize: 128
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.9
+      Timeout: 300
+#      VpcConfig:
+#        SecurityGroupIds: [!Ref LambdaSecurityGroupId]
+#        SubnetIds:
+#          - !Ref SubnetId1
+      Tags:
+          name: !Sub '${UID}-${AppName}-${Env}-${StudioUserProfileName}-delete-kernelgateway'
+          uid: !Ref UID
+          env: !Ref Env
+          appname: !Ref AppName

@@ -1,0 +1,566 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: AWS CloudFormation Template for Event-Driven App
+
+Parameters:
+#  LambdaLayerArn:
+#    Description: Lambda Layer Arn
+#    Type: String
+  DDBInitialSeed:
+    Description: Select ENABLED only if SageMaker Domain isn't deployed along this stack
+    Type: String
+    AllowedValues:
+      - DISABLED
+      - ENABLED
+    Default: DISABLED
+  State:
+    Description: The state of the rule.
+    Type: String
+    AllowedValues:
+      - DISABLED
+      - ENABLED
+    Default: ENABLED
+  Source:
+    Description: Source for Event Rule
+    Type: String
+    AllowedValues:
+      - aws.sagemaker
+      - aws.s3
+    Default: aws.sagemaker
+  DetailType:
+    Description: DetailType for Event Rule
+    Type: String
+    AllowedValues:
+      - AWS API Call via CloudTrail
+    Default: AWS API Call via CloudTrail
+  EventSource:
+    Description: Event source for Event Rule
+    Type: String
+    AllowedValues:
+      - sagemaker.amazonaws.com
+      - s3.amazonaws.com
+    Default: sagemaker.amazonaws.com
+  EventName:
+    Description: Event name for Event Rule
+    Type: String
+    Default: CreateUserProfile
+  SubnetId1:
+    Description: SubnetId1 of an existing subnet in the VPC
+    Type: AWS::SSM::Parameter::Value<String>
+    ConstraintDescription: must be an existing subnets in the VPC.
+    Default: /network/vpc/app/subnet1
+#  LambdaSecurityGroupId:
+#    Description: Lambda SecurityGroupId of an existing subnet in the VPC
+#    Type: AWS::SSM::Parameter::Value<String>
+#    ConstraintDescription: must be an existing security groups in the VPC.
+#    Default: /network/vpc/lambda/securitygroups
+  TableName:
+    Type: String
+    MaxLength: 25
+    MinLength: 3
+    Default: studioUser
+  HistoryTableName:
+    Type: String
+    MaxLength: 25
+    MinLength: 3
+    Default: studioUserHistory
+  HashKeyElementName:
+    Description: HashType PrimaryKey Name
+    Type: String
+    AllowedPattern: '[a-zA-Z_-]*'
+    MinLength: '1'
+    MaxLength: '100'
+    ConstraintDescription: must contain only letters with -_
+    Default: username
+  HashKeyElementType:
+    Description: HashType PrimaryKey Type
+    Type: String
+    AllowedPattern: '[S|N]'
+    MinLength: '1'
+    MaxLength: '1'
+    ConstraintDescription: must be either S or N
+    Default: S
+  RangeKey:
+    Type: String
+    Description: Range Key For DynamoDB
+    AllowedPattern: '[a-zA-Z_-]*'
+    MinLength: '1'
+    MaxLength: '100'
+    ConstraintDescription: must contain only letters with -_
+    Default: role_name
+  RangeKeyElementType:
+    Description: Range Key Type
+    Type: String
+    AllowedPattern: '[S|N]'
+    MinLength: '1'
+    MaxLength: '1'
+    ConstraintDescription: must be either S or N
+    Default: S
+  RangeKeyHistoryTable:
+    Type: String
+    Description: Range Key For DynamoDB
+    AllowedPattern: '[a-zA-Z_-]*'
+    MinLength: '1'
+    MaxLength: '100'
+    ConstraintDescription: must contain only letters with -_
+    Default: epoctime
+  RangeKeyElementTypeHistoryTable:
+    Description: Range Key Type
+    Type: String
+    AllowedPattern: '[S|N]'
+    MinLength: '1'
+    MaxLength: '1'
+    ConstraintDescription: must be either S or N
+    Default: N
+  ProvisionedThroughputRCU:
+    Type: String
+    Description: Provisioned Throughput Read Capacity Unit
+    Default: 1
+  ProvisionedThroughputWCU:
+    Type: String
+    Description: Provisioned Throughput Write Capacity Unit
+    Default: 1
+  Stepfunction:
+    Description: Stepfunction Name
+    Type: AWS::SSM::Parameter::Value<String>
+    ConstraintDescription: must be an existing stepfunction.
+    Default: /app/stepfunction/recovery
+  SageMakerSecurityGroupId:
+    Description: SecurityGroupId of SageMaker Studio in the VPC
+    Type: AWS::SSM::Parameter::Value<String>
+    ConstraintDescription: must be an existing security groups in the VPC.
+    Default: /network/vpc/sagemaker/securitygroups
+  ############### Tagging Parameters ####################
+  UID:
+    Type: String
+    Description: Universal Identifier
+    MinLength: 3
+    MaxLength: 10
+    Default: demo
+  Env:
+    Type: String
+    Description: Env instance of the resource
+    AllowedValues:
+      - dev
+      - qa
+      - prd
+    Default: dev
+  AppName:
+    Type: String
+    MaxLength: 25
+    MinLength: 3
+    AllowedPattern: "[a-z][a-z0-9+-=._:/@]*[a-z0-9]"
+    ConstraintDescription: Must begin with a lowercase letter and contain only lowercase alphanumeric characters with +-=._:/@
+    Description: Name of the application, keep to 15 characters or less
+    Default: test-app
+Conditions:
+  DDBInitialSeedCond: !Equals [ !Ref DDBInitialSeed, 'ENABLED']
+Transform: AWS::Serverless-2016-10-31
+Resources:
+  ############### Event Rule ####################
+  CloudWatchEventRule:
+      Type: AWS::Events::Rule
+      Properties:
+        State: !Ref State
+        Name: !Sub '${UID}-${AppName}-${Env}-event-rule'
+#        EventBusName: #use default
+        EventPattern:
+          source:
+            - !Ref Source
+          detail-type:
+            - !Ref DetailType
+          detail:
+            eventSource:
+              - !Ref EventSource
+            eventName:
+              - !Ref EventName
+        Targets:
+          - Arn: !GetAtt EventProcessorLambda.Arn
+            Id: event-rule-processor
+  #lamba uses resource-based policy
+  InvokeLambdaPermissions:
+      Type: AWS::Lambda::Permission
+      Properties:
+        FunctionName: !GetAtt EventProcessorLambda.Arn
+        Action: lambda:InvokeFunction
+        Principal: events.amazonaws.com
+        SourceArn: !GetAtt CloudWatchEventRule.Arn
+  ############### Dynamo DB ####################
+  UserTable:
+    Type: AWS::DynamoDB::Table
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: "specifying a name without update with interruption is allowed"
+    Properties:
+      TableName: !Ref TableName
+      AttributeDefinitions:
+        - AttributeName: !Ref HashKeyElementName
+          AttributeType: !Ref HashKeyElementType
+        - AttributeName: !Ref RangeKey
+          AttributeType: !Ref RangeKeyElementType
+      KeySchema:
+        - AttributeName: !Ref HashKeyElementName
+          KeyType: HASH
+        - AttributeName: !Ref RangeKey
+          KeyType: RANGE
+      ProvisionedThroughput:
+        ReadCapacityUnits: !Ref ProvisionedThroughputRCU
+        WriteCapacityUnits: !Ref ProvisionedThroughputWCU
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      Tags:
+        - Key: name
+          Value: !Ref TableName
+        - Key: uid
+          Value: !Ref UID
+        - Key: env
+          Value: !Ref Env
+        - Key: appname
+          Value: !Ref AppName
+  HistoryTable:
+    Type: AWS::DynamoDB::Table
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: "specifying a name without update with interruption is allowed"
+    Properties:
+      TableName: !Ref HistoryTableName
+      AttributeDefinitions:
+        - AttributeName: !Ref HashKeyElementName
+          AttributeType: !Ref HashKeyElementType
+        - AttributeName: !Ref RangeKeyHistoryTable
+          AttributeType: !Ref RangeKeyElementTypeHistoryTable
+      KeySchema:
+        - AttributeName: !Ref HashKeyElementName
+          KeyType: HASH
+        - AttributeName: !Ref RangeKeyHistoryTable
+          KeyType: RANGE
+      ProvisionedThroughput:
+        ReadCapacityUnits: !Ref ProvisionedThroughputRCU
+        WriteCapacityUnits: !Ref ProvisionedThroughputWCU
+      Tags:
+        - Key: name
+          Value: !Ref HistoryTableName
+        - Key: uid
+          Value: !Ref UID
+        - Key: env
+          Value: !Ref Env
+        - Key: appname
+          Value: !Ref AppName
+  ScalingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - application-autoscaling.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:DescribeTable
+                  - dynamodb:UpdateTable
+                  - cloudwatch:PutMetricAlarm
+                  - cloudwatch:DescribeAlarms
+                  - cloudwatch:GetMetricStatistics
+                  - cloudwatch:SetAlarmState
+                  - cloudwatch:DeleteAlarms
+                Resource: "*"
+  WriteCapacityScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: 10
+      MinCapacity: 1
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref UserTable
+      RoleARN: !GetAtt ScalingRole.Arn
+      ScalableDimension: dynamodb:table:WriteCapacityUnits
+      ServiceNamespace: dynamodb
+  WriteScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: WriteAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref WriteCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70.0
+        ScaleInCooldown: 60
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBWriteCapacityUtilization
+  ReadCapacityScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: 10
+      MinCapacity: 1
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref UserTable
+      RoleARN: !GetAtt ScalingRole.Arn
+      ScalableDimension: dynamodb:table:ReadCapacityUnits
+      ServiceNamespace: dynamodb
+  ReadScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: ReadAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ReadCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70.0
+        ScaleInCooldown: 60
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBReadCapacityUtilization
+  ############### Lambda ####################
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /service-role/
+      RoleName: !Sub '${UID}-${AppName}-${Env}-lambda-event-processor-role'
+      ManagedPolicyArns:
+        - !Ref LambdaExecPolicy
+      Tags:
+        - Key: name
+          Value: !Sub "${UID}-${AppName}-${Env}-lambda-event-processor-role"
+        - Key: uid
+          Value: !Ref UID
+        - Key: env
+          Value: !Ref Env
+        - Key: appname
+          Value: !Ref AppName
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: "specifying a name for IAM managed policy without update with interruption is allowed"
+  LambdaExecPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: "specifying a name for IAM managed policy without update with interruption is allowed"
+    Properties:
+      ManagedPolicyName: !Sub "${UID}-${AppName}-${Env}-lambda-event-processor-policy"
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: DynamoDBStream
+            Effect: Allow
+            Action:
+              - dynamodb:DescribeStream
+              - dynamodb:GetRecords
+              - dynamodb:GetShardIterator
+              - dynamodb:ListStreams
+            Resource: !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:*'
+          - Sid: DynamoDBQuery
+            Effect: Allow
+            Action:
+              - dynamodb:DescribeTable
+              - dynamodb:Query
+              - dynamodb:Scan
+              - dynamodb:Update*
+              - dynamodb:Put*
+              - dynamodb:Get*
+              - dynamodb:Batch*
+            Resource:
+              - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}'
+              - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${HistoryTableName}'
+          - Sid: SagemakerListDescribe
+            Effect: Allow
+            Action:
+              - sagemaker:List*
+              - sagemaker:Describe*
+            Resource: !Sub 'arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:*'
+          - Effect: Allow
+            Sid: Logs
+            Action:
+              - logs:CreateLog*
+              - logs:GetLogDelivery
+              - logs:UpdateLogDelivery
+              - logs:PutLogEvents
+              - logs:DeleteLogDelivery
+              - logs:ListLogDeliveries
+              - logs:PutResourcePolicy
+              - logs:DescribeResourcePolicies
+              - logs:DescribeLogGroups
+            Resource: '*'
+          - Sid: CloudWatch
+            Effect: Allow
+            Action:
+              - cloudwatch:GetMetricData
+              - cloudwatch:GetMetricStatistics
+              - cloudwatch:ListMetrics
+              - cloudwatch:PutMetricData
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - ssm:GetParameters
+              - ssm:GetParameter
+            Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/*'
+          - Effect: Allow
+            Sid: StepFunction
+            Action:
+              - states:StartExecution
+            Resource: !Sub 'arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${Stepfunction}'
+          - Sid: EC2
+            Effect: Allow
+            Action:
+              - ec2:Describe*
+              - ec2:CreateNetworkInterface*
+              - ec2:DeleteNetworkInterface*
+              - ec2:AttachNetworkInterface
+            Resource: '*'
+          - Sid: KMSKeyAccess
+            Effect: Allow
+            Action:
+              - kms:CreateGrant
+              - kms:Decrypt
+              - kms:DescribeKey
+              - kms:Encrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:ListAliases
+            Resource: arn:aws:kms:*
+            Condition: {
+              "StringLike": {
+                "kms:RequestAlias": !Sub "alias/${UID}*"
+              }
+            }
+  EventProcessorLambda:
+    Type: AWS::Serverless::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W58
+            reason: "lambda role arn referened in the resource has permission to write CloudWatch Logs"
+    Properties:
+      FunctionName: !Sub '${UID}-${AppName}-${Env}-event-processor'
+#      CodeUri: ../../src/event-processor
+      CodeUri: ../../src/
+      Description: Event processor triggered by Event Rule
+      Handler: event-processor.lambda_handler
+      MemorySize: 128
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          USERTABLE: !Ref TableName
+          HISTORYTABLE: !Ref HistoryTableName
+          HASHKEY: !Ref HashKeyElementName
+          RANGEKEY: !Ref RangeKey
+          HASHKEY_HIST: !Ref HashKeyElementName
+          RANGEKEY_HIST: !Ref RangeKeyHistoryTable
+      Runtime: python3.9
+#      Layers:
+#        - !Ref LambdaLayerArn
+      Timeout: 300
+      ReservedConcurrentExecutions: 1
+      Tags:
+          name: !Sub '${UID}-${AppName}-${Env}-event-processor'
+          uid: !Ref UID
+          env: !Ref Env
+          appname: !Ref AppName
+  DDBStreamProcessor:
+    Type: AWS::Serverless::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W58
+            reason: "lambda role arn referened in the resource has permission to write CloudWatch Logs"
+    Properties:
+      FunctionName: !Sub '${UID}-${AppName}-${Env}-stream-processor'
+      Description: An AWS Lambda trigger to process a stream from a DynamoDB table
+      Handler: ddb-stream-processor.lambda_handler
+      Runtime: python3.9
+#      Layers:
+#        - !Ref LambdaLayerArn
+      CodeUri: ../../src/
+      Environment:
+        Variables:
+          STEPFUNCTION: !Ref Stepfunction
+          SOURCE_SECURITY_GROUP: !Ref SageMakerSecurityGroupId
+          TARGET_SECURITY_GROUP: !Ref SageMakerSecurityGroupId
+          SUBNET1: !Ref SubnetId1
+          USERTABLE: !Ref TableName
+          HISTORYTABLE: !Ref HistoryTableName
+      MemorySize: 128
+      Timeout: 300
+      Role: !GetAtt LambdaExecutionRole.Arn
+      ReservedConcurrentExecutions: 1
+      Tags:
+          name: !Sub '${UID}-${AppName}-${Env}-stream-processor'
+          uid: !Ref UID
+          env: !Ref Env
+          appname: !Ref AppName
+  EventStreamProcessor:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      BatchSize: 1 # How many items we want to process at once
+      Enabled: True
+      EventSourceArn: !GetAtt UserTable.StreamArn
+      FunctionName: !GetAtt DDBStreamProcessor.Arn
+      StartingPosition: TRIM_HORIZON #Preserv ordering
+  ############### Custom Resource ####################
+  DDBSeed:
+    Type: Custom::DDBSeedApp
+    Condition: DDBInitialSeedCond
+    Properties:
+      ServiceToken: !GetAtt DDBSeedLambda.Arn
+  DDBSeedLambda:
+    Type: AWS::Serverless::Function
+    Condition: DDBInitialSeedCond
+    DependsOn: UserTable
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W58
+            reason: "lambda role arn referened in the resource has permission to write CloudWatch Logs"
+    Properties:
+      FunctionName: !Sub '${UID}-${AppName}-${Env}-initial-seed-processor'
+#      CodeUri: ../../src/seed-table
+      CodeUri: ../../src/
+      Description: DDB Inital Seed for Existing Studio Users
+      Handler: seed-table.lambda_handler
+      MemorySize: 128
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          USERTABLE: !Ref TableName
+          HISTORYTABLE: !Ref HistoryTableName
+          HASHKEY: !Ref HashKeyElementName
+          RANGEKEY: !Ref RangeKey
+          HASHKEY_HIST: !Ref HashKeyElementName
+          RANGEKEY_HIST: !Ref RangeKeyHistoryTable
+      Runtime: python3.9
+#      Layers:
+#        - !Ref LambdaLayerArn
+      Timeout: 300
+      ReservedConcurrentExecutions: 1
+      Tags:
+          name: !Sub '${UID}-${AppName}-${Env}-initial-seed-processor'
+          uid: !Ref UID
+          env: !Ref Env
+          appname: !Ref AppName

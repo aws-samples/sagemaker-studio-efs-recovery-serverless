@@ -1,0 +1,113 @@
+AWSTemplateFormatVersion: 2010-09-09
+Transform: AWS::Serverless-2016-10-31
+Description: AWS CloudFormation Template for Bootstraping Environment
+
+Parameters:
+  VpcId:
+    Description: VPCId of existing Virtual Private Cloud
+    Type: String
+  SubnetId1:
+    Description: SubnetId1 of an existing subnet in the VPC
+    Type: String
+    ConstraintDescription: must be an existing subnets in the VPC.
+  ############### Tagging Parameters ####################
+  UID:
+    Type: String
+    Description: Universal Identifier
+    MinLength: 3
+    MaxLength: 10
+    Default: demo
+  Env:
+    Type: String
+    Description: Env instance of the resource
+    AllowedValues:
+      - dev
+      - qa
+      - prd
+    Default: dev
+  AppName:
+    Type: String
+    MaxLength: 25
+    MinLength: 3
+    AllowedPattern: "[a-z][a-z0-9+-=._:/@]*[a-z0-9]"
+    ConstraintDescription: Must begin with a lowercase letter and contain only lowercase alphanumeric characters with +-=._:/@
+    Description: Name of the application, keep to 15 characters or less
+    Default: test-app
+Resources:
+  ############### VPC ####################
+  SageMakerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DeletionPolicy: Retain
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: "specifying a name for security group without update with interruption is allowed"
+          - id: W42
+            reason: "Security Groups ingress with an ipProtocol of -1 is allowed within the same subnet"
+          - id: W5
+            reason: "egress to all without no ip address specification is allowed"
+          - id: W40
+            reason: "Security Groups egress with an IpProtocol of -1 is allowed"
+    Properties:
+      SecurityGroupEgress:
+        - Description: All traffic is allowed outbound
+          IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+      GroupDescription: security group for SageMaker notebook instance, training jobs and hosting endpoint
+      GroupName: !Sub "${UID}-${AppName}-${Env}-sagemaker"
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: name
+          Value: !Sub "${UID}-${AppName}-${Env}-sagemaker"
+        - Key: uid
+          Value: !Ref UID
+        - Key: env
+          Value: !Ref Env
+        - Key: Appname
+          Value: !Ref AppName
+  SecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    DeletionPolicy: Retain
+    Properties:
+      IpProtocol: '-1'
+      Description: Self-referencing the security group to enable communication between instances within the same SG
+      GroupId: !Ref SageMakerSecurityGroup
+      SourceSecurityGroupId: !Ref SageMakerSecurityGroup
+  ############### SSM ####################
+  VpcIdSSM:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /network/vpc/app/vpcid
+      Type: String
+      Value: !Ref VpcId
+      Description: VpcId for app
+  SubnetId1SSM:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /network/vpc/app/subnet1
+      Type: String
+      Value: !Ref SubnetId1
+      Description: Subnet1 for app
+  SageMakerSecurityGroupSSM:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /network/vpc/sagemaker/securitygroups
+      Type: String
+      Value: !Ref SageMakerSecurityGroup
+      Description: SageMakerSecurityGroup
+#  LambdaSecurityGroupSSM:
+#    Type: AWS::SSM::Parameter
+#    Properties:
+#      Name: /network/vpc/lambda/securitygroups
+#      Type: String
+#      Value: !GetAtt LambdaSecurityGroup.GroupId
+#      Description: Security Group ID for the Lambda Resources
+
+############### Output ####################
+#Outputs:
+#  LambdaLayerArn:
+#    Value: !Ref LambdaLayer
+#    Description: Lambda Layer Arn
+#    Export:
+#      Name: !Sub "${UID}-${AppName}-${Env}-lambda-layer"

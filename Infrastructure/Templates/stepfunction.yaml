@@ -1,0 +1,353 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: AWS CloudFormation Template for AWS Step Function
+
+Parameters:
+  StepFunctionName:
+    Type: String
+    Description: name of the Step Function
+    Default: stepfunction
+  SQSName:
+    Type: String
+    Description: name of the SQS
+    Default: sqs
+  ############### Tagging Parameters ####################
+  UID:
+    Type: String
+    Description: Universal Identifier
+    MinLength: 3
+    MaxLength: 10
+    Default: demo
+  Env:
+    Type: String
+    Description: Env instance of the resource
+    AllowedValues:
+      - dev
+      - qa
+      - prd
+    Default: dev
+  AppName:
+    Type: String
+    MaxLength: 25
+    MinLength: 3
+    AllowedPattern: "[a-z][a-z0-9+-=._:/@]*[a-z0-9]"
+    ConstraintDescription: Must begin with a lowercase letter and contain only lowercase alphanumeric characters with +-=._:/@
+    Description: Name of the application, keep to 15 characters or less
+    Default: test-app
+Resources:
+  ############### SQS ####################
+  SQS:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${UID}-${AppName}-${Env}-${SQSName}"
+      Tags:
+        - Key: name
+          Value: !Sub "${UID}-${AppName}-${Env}-${SQSName}"
+        - Key: uid
+          Value: !Ref UID
+        - Key: env
+          Value: !Ref Env
+        - Key: Appname
+          Value: !Ref AppName
+  ############### IAM ####################
+  ExecPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: "specifying a name for IAM managed policy without update with interruption is allowed"
+          - id: W13
+            reason: "* allowed for log"
+    Properties:
+      ManagedPolicyName: !Sub "${UID}-${AppName}-${Env}-${StepFunctionName}-policy"
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Sid: NetworkInterface
+            Action:
+              - ec2:CreateNetworkInterface
+              - ec2:CreateNetworkInterfacePermission
+              - ec2:DescribeNetworkInterfaces
+              - ec2:DescribeSecurityGroups
+              - ec2:DescribeSubnets
+            Resource: '*'
+          - Effect: Allow
+            Sid: CloudWatch
+            Action:
+              - logs:CreateLogDelivery
+              - logs:GetLogDelivery
+              - logs:UpdateLogDelivery
+              - logs:DeleteLogDelivery
+              - logs:ListLogDeliveries
+              - logs:PutResourcePolicy
+              - logs:DescribeResourcePolicies
+              - logs:DescribeLogGroups
+            Resource: '*'
+          - Effect: Allow
+            Sid: Sagemaker
+            Action:
+              - sagemaker:ListApps
+            Resource: !Sub 'arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:app/*'
+          - Effect: Allow
+            Sid: DataSync
+            Action:
+              - datasync:CreateLocationEfs
+              - datasync:CreateTask
+              - datasync:StartTaskExecution
+              - datasync:DescribeTaskExecution
+            Resource: !Sub 'arn:aws:datasync:${AWS::Region}:${AWS::AccountId}:*'
+          - Effect: Allow
+            Sid: SQS
+            Action:
+              - sqs:SendMessage
+            Resource: !Sub 'arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:${UID}-${AppName}-${Env}-${SQSName}'
+          - Effect: Allow
+            Sid: EFS
+            Action:
+              - elasticfilesystem:Describe*
+            Resource: '*'
+  Role:
+    Type: AWS::IAM::Role
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: "specifying a name for IAM managed policy without update with interruption is allowed"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - states.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /apps/
+      RoleName: !Sub '${UID}-${AppName}-${Env}-${StepFunctionName}-role'
+      ManagedPolicyArns:
+        - !Ref ExecPolicy
+      Tags:
+        - Key: name
+          Value: !Sub '${UID}-${AppName}-${Env}-${StepFunctionName}-role'
+        - Key: uid
+          Value: !Ref UID
+        - Key: env
+          Value: !Ref Env
+        - Key: Appname
+          Value: !Ref AppName
+  ############### Step Function ####################
+  StepFunction:
+    Type: 'AWS::StepFunctions::StateMachine'
+    Properties:
+      StateMachineName: !Sub ${UID}-${AppName}-${Env}-${StepFunctionName}
+      DefinitionString: !Sub |
+        {
+          "Comment": "A description of my state machine",
+          "StartAt": "ListApps",
+          "States": {
+            "ListApps": {
+              "Type": "Task",
+              "Next": "Length_Zero",
+              "Parameters": {
+                "DomainIdEquals.$": "$.Target.DomainID",
+                "MaxResults": 1,
+                "UserProfileNameEquals.$": "$.Target.UserProfileName"
+              },
+              "Resource": "arn:aws:states:::aws-sdk:sagemaker:listApps",
+              "ResultPath": "$.ListApps",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "Next": "SQS SendMessage"
+                }
+              ],
+              "ResultSelector": {
+                "Length.$": "States.ArrayLength($.Apps)"
+              }
+            },
+            "Wait-Apps": {
+              "Type": "Wait",
+              "Seconds": 300,
+              "Next": "ListApps"
+            },
+            "Length_Zero": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.ListApps.Length",
+                  "NumericEquals": 0,
+                  "Next": "Wait-Apps"
+                }
+              ],
+              "Default": "CreateLocationEfsSource"
+            },
+            "CreateLocationEfsSource": {
+              "Type": "Task",
+              "Next": "CreateLocationEfsTarget",
+              "Parameters": {
+                "Ec2Config": {
+                  "SecurityGroupArns.$": "$.Source.SecurityGroupArns",
+                  "SubnetArn.$": "$.Source.SubnetArn"
+                },
+                "EfsFilesystemArn.$": "$.Source.EfsFilesystemArn",
+                "Subdirectory.$": "$.Source.HomeEfsFileSystemUid"
+              },
+              "Resource": "arn:aws:states:::aws-sdk:datasync:createLocationEfs",
+              "InputPath": "$",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "Next": "SQS SendMessage"
+                }
+              ],
+              "ResultPath": "$.Source.CreateLocationResult"
+            },
+            "CreateLocationEfsTarget": {
+              "Type": "Task",
+              "Next": "CreateTask",
+              "Parameters": {
+                "Ec2Config": {
+                  "SecurityGroupArns.$": "$.Target.SecurityGroupArns",
+                  "SubnetArn.$": "$.Target.SubnetArn"
+                },
+                "EfsFilesystemArn.$": "$.Target.EfsFilesystemArn",
+                "Subdirectory.$": "$.Target.HomeEfsFileSystemUid"
+              },
+              "Resource": "arn:aws:states:::aws-sdk:datasync:createLocationEfs",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "Next": "SQS SendMessage"
+                }
+              ],
+              "ResultPath": "$.Target.CreateLocationResult"
+            },
+            "CreateTask": {
+              "Type": "Task",
+              "Parameters": {
+                "CloudWatchLogGroupArn.$": "$.Log.CloudWatchLogGroupArn",
+                "DestinationLocationArn.$": "$.Target.CreateLocationResult.LocationArn",
+                "SourceLocationArn.$": "$.Source.CreateLocationResult.LocationArn",
+                "Options.$": "$.Options"
+              },
+              "Resource": "arn:aws:states:::aws-sdk:datasync:createTask",
+              "Next": "StartTaskExecution",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "Next": "SQS SendMessage"
+                }
+              ],
+              "ResultPath": "$.Task"
+            },
+            "StartTaskExecution": {
+              "Type": "Task",
+              "Parameters": {
+                "TaskArn.$": "$.Task.TaskArn"
+              },
+              "Resource": "arn:aws:states:::aws-sdk:datasync:startTaskExecution",
+              "Next": "Wait-TaskEnd",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "Next": "SQS SendMessage"
+                }
+              ],
+              "ResultPath": "$.Task"
+            },
+            "Wait-TaskEnd": {
+              "Type": "Wait",
+              "Seconds": 30,
+              "Next": "DescribeTaskExecution"
+            },
+            "DescribeTaskExecution": {
+              "Type": "Task",
+              "Parameters": {
+                "TaskExecutionArn.$": "$.Task.TaskExecutionArn"
+              },
+              "Resource": "arn:aws:states:::aws-sdk:datasync:describeTaskExecution",
+              "Next": "Is_running",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "Next": "SQS SendMessage"
+                }
+              ],
+              "ResultPath": "$.Result"
+            },
+            "Is_running": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Or": [
+                    {
+                      "Variable": "$.Result.Status",
+                      "StringEquals": "SUCCESS"
+                    },
+                    {
+                      "Variable": "$.Result.Status",
+                      "StringEquals": "ERROR"
+                    }
+                  ],
+                  "Next": "Result"
+                }
+              ],
+              "Default": "Wait-TaskEnd"
+            },
+            "Result": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.Result.Status",
+                  "StringMatches": "ERROR",
+                  "Next": "SQS SendMessage"
+                }
+              ],
+              "Default": "Success"
+            },
+            "SQS SendMessage": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::sqs:sendMessage",
+              "Parameters": {
+                "MessageBody.$": "$",
+                "QueueUrl": "https://sqs.${AWS::Region}.amazonaws.com/${AWS::AccountId}/${UID}-${AppName}-${Env}-${SQSName}"
+              },
+              "End": true
+            },
+            "Success": {
+              "Type": "Succeed"
+            }
+          }
+        }
+      RoleArn: !GetAtt Role.Arn
+      Tags:
+        - Key: name
+          Value: !Sub '${UID}-${AppName}-${Env}-${StepFunctionName}-role'
+        - Key: uid
+          Value: !Ref UID
+        - Key: env
+          Value: !Ref Env
+        - Key: Appname
+          Value: !Ref AppName
+  ############### SSM ####################
+  StepFunctionNameSSM:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /app/stepfunction/recovery
+      Type: String
+      Value: !GetAtt StepFunction.Name
+      Description: !Sub 'Step Function for SageMaker Domain Recovery ${StepFunction.Name}'
