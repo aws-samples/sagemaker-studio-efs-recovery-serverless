@@ -17,10 +17,10 @@ The event-driven app includes the following steps:
 4.	Another Lambda Function trigger the process to restore the user files using the User Files Restore Tools in the diagram, which is described below. 
 
 The backup and recovery workflow includes the following steps:
-5.	The backup and recovery workflow consists of the AWS Step Functions, which is integrated with other AWS services including AWS DataSync, to orchestrate the recovery of the user files from the detached private home directory to a new directory in Studio Domain EFS. With The Step Functions Workflow Studio, the workflow can be implemented with a no-code, such as in this case, or a low-code for a more customized solution. The Step Function is invoked when the user profile creation event is detected by the event-driven app.
-6.	For each user, the Step Functions execute the DataSync task to copy all files from their respective home directories in the detached volume to the new directory. The image below is the actual graph of the Step Functions.
+1. The backup and recovery workflow consists of the AWS Step Functions, which is integrated with other AWS services including AWS DataSync, to orchestrate the recovery of the user files from the detached private home directory to a new directory in Studio Domain EFS. With The Step Functions Workflow Studio, the workflow can be implemented with a no-code, such as in this case, or a low-code for a more customized solution. The Step Function is invoked when the user profile creation event is detected by the event-driven app.
+2. For each user, the Step Functions execute the DataSync task to copy all files from their respective home directories in the detached volume to the new directory. The image below is the actual graph of the Step Functions.
 ![Step Functions Graph](images/stepfunctions_graph.png)
-7. When the users open their Studio, all of the files from respective directories in detached volume will be available to themselves.
+3. When the users open their Studio, all of the files from respective directories in detached volume will be available to themselves.
 
 ## Tools and Services
 ***
@@ -51,11 +51,11 @@ The backup and recovery workflow includes the following steps:
 ***
 1. Create a new directory, navigate to that directory in a terminal and clone the GitHub repository:
    ```bash
-   git clone https://gitlab.aws.dev/kennysat/sagemaker-studio-efs-restore.git
+   git clone https://github.com/aws-samples/sagemaker-studio-efs-recovery-serverless.git
    ```
 2. Change directory to the solution directory:
    ```bash
-   cd sagemaker-studio-efs-restore
+   cd sagemaker-studio-efs-recovery-serverless
    ```
 3. Display deployment script usage
    ```bash
