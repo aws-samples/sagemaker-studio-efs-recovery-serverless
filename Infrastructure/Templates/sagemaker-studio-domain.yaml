@@ -8,9 +8,9 @@ Outputs:
     Export:
       Name: 'sagemaker-domain-id'
 Parameters:
-#  LambdaLayerArn:
-#    Description: Lambda Layer Arn
-#    Type: String
+  LambdaLayerArn:
+    Description: Lambda Layer Arn
+    Type: String
   VpcId:
     Description: VPCId of existing Virtual Private Cloud
     Type: AWS::SSM::Parameter::Value<String>
@@ -333,6 +333,9 @@ Resources:
       DefaultUserSettings:
           ExecutionRole: !GetAtt SageMakerExecRole.Arn
           SecurityGroups: [!Ref SageMakerSecurityGroupId]
+      DefaultSpaceSettings:
+          ExecutionRole: !GetAtt SageMakerExecRole.Arn
+          SecurityGroups: [!Ref SageMakerSecurityGroupId]
       DomainName: !Sub "${UID}-${AppName}-${Env}-studio-domain"
       SubnetIds:
         - !Ref SubnetId1
@@ -456,15 +459,14 @@ Resources:
     Properties:
       FunctionName: !Sub '${UID}-${AppName}-${Env}-authorize-efs-security-group'
       ReservedConcurrentExecutions: 1
-#      CodeUri: ../../src/update-security-group
       CodeUri: ../../src/
       Description: Update Security Group of EFS  to allow inbound from source Security Group
       Handler: add-security-group.lambda_handler
       MemorySize: 128
       Role: !GetAtt LambdaExecutionRole.Arn
       Runtime: python3.9
-#      Layers:
-#        - !Ref LambdaLayerArn
+      Layers:
+        - !Ref LambdaLayerArn
       Timeout: 300
       Tags:
           name: !Sub '${UID}-${AppName}-${Env}-authorize-efs-security-group'

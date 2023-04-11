@@ -1,5 +1,4 @@
 import boto3
-import argparse
 import os
 import logging
 import time
@@ -11,19 +10,19 @@ from common import cfnresponse
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-def get_domain_id(client)->string:
-    domain_id = ''
+def get_domain_ids(client)->List:
+    domain_ids = []
     try:
         response = client.list_domains()
-        # assumption is less or equal to 1 domain per account per region
         if len(response['Domains']) == 0:
-            return domain_id
-        domain_id = response['Domains'][0]['DomainId']
+            return None
+        for domain in response['Domains']:
+            domain_ids.append(domain['DomainId'])
     except ClientError as e:
         logger.error(
             f"Could not get studio domain id: {e.response['Error']['Code']}:{e.response['Error']['Message']}")
-        return domain_id
-    return domain_id
+        return domain_ids
+    return domain_ids
 
 def get_domain_metadata(domain_id: string, client)->Mapping[str, str]:
     try:
@@ -50,6 +49,20 @@ def list_profiles(domain_id: string, client)-> List[str]:
         return
     return users
 
+def list_spaces(domain_id: string, client)-> List[str]:
+    users = []
+    try:
+        paginator = client.get_paginator('list_spaces')
+        page_iterator = paginator.paginate(DomainIdEquals=domain_id,PaginationConfig={'MaxItems': 500})
+        for page in page_iterator:
+            for s in page['Spaces']:
+                users. append(s['SpaceName'])
+    except ClientError as e:
+        logger.error(
+            f"Could not list spaces with domain id {domain_id}: {e.response['Error']['Code']}:{e.response['Error']['Message']}")
+        return
+    return users
+
 def get_user_metadata(domain_id: string, profile_name: string, client):
     try:
         response = client.describe_user_profile(
@@ -59,6 +72,18 @@ def get_user_metadata(domain_id: string, profile_name: string, client):
     except ClientError as e:
         logger.error(
             f"Could not describe user {profile_name}: {e.response['Error']['Code']}:{e.response['Error']['Message']}")
+        return
+    return response
+
+def get_space_metadata(domain_id: string, space_name: string, client):
+    try:
+        response = client.describe_space(
+            DomainId=domain_id,
+            SpaceName=space_name
+        )
+    except ClientError as e:
+        logger.error(
+            f"Could not describe space {space_name}: {e.response['Error']['Code']}:{e.response['Error']['Message']}")
         return
     return response
 
@@ -81,6 +106,24 @@ def get_all_users_metadata(domain_id: string, efs_id: string, profile_names: Lis
             continue
     return data
 
+def get_all_spaces_metadata(domain_id: string, efs_id: string, space_names: List[str], client):
+    data = []
+    for name in space_names:
+        response = get_space_metadata(domain_id, name, client)
+        space_meta = {
+            "DomainId": domain_id,
+            "SpaceName": name,
+            "HomeEfsFileSystemId": efs_id,
+            "HomeEfsFileSystemUid": "",
+            "ExecutionRole": ""
+        }
+        if response:
+            space_meta["HomeEfsFileSystemUid"] = response['HomeEfsFileSystemUid']
+            data.append(space_meta)
+        else:
+            continue
+    return data
+
 def lambda_handler(event, context):
     logger.info(f"received event: {event}")
     physicalResourceId = event.get('PhysicalResourceId')
@@ -94,42 +137,55 @@ def lambda_handler(event, context):
         )
     try:
         sagemaker = boto3.client('sagemaker')
-        domain_id = get_domain_id(sagemaker) #event.get('ResourceProperties')['DOMAIN_ID']
-        domain_metadata = get_domain_metadata(domain_id, sagemaker)
-        efs_id = domain_metadata['HomeEfsFileSystemId'] #event.get('ResourceProperties')['EFS_ID']
-        users = list_profiles(domain_id, sagemaker)
-        logger.info(f"domain {domain_id} has users {users}")
-        data = get_all_users_metadata(domain_id, efs_id, users, sagemaker)
+        domain_ids = get_domain_ids(sagemaker) #event.get('ResourceProperties')['DOMAIN_ID']
         dynamodb = boto3.resource('dynamodb')
         user_table = os.getenv('USERTABLE', 'studioUser')
         user_hist_table = os.getenv('HISTORYTABLE', 'studioUserHIstory')
-        logger.info(f"update table {user_table} with data: {data}")
-        table = dynamodb.Table(user_table)
-        with table.batch_writer() as batch:
-            # put in a batch
-            for record in data:
-                item = {
-                    os.getenv('HASHKEY_HIST', 'username'): record["UserProfileName"],
-                    "role_name": record["ExecutionRole"],
-                    "domain_id": record["DomainId"],
-                    "efs_sys_id": record["HomeEfsFileSystemId"],
-                    "efs_uid": record["HomeEfsFileSystemUid"]
-                }
-                batch.put_item(Item=item)
-        logger.info(f"update history table {user_hist_table}")
         hist_table = dynamodb.Table(user_hist_table)
-        with hist_table.batch_writer() as batch:
-            # put in a batch
-            for record in data:
-                item = {
-                    os.getenv('HASHKEY_HIST', 'username'): record["UserProfileName"],
-                    os.getenv('RANGEKEY_HIST', 'epoctime'): int(time.time() * 1000),
-                    "role_name": record["ExecutionRole"],
-                    "domain_id": record["DomainId"],
-                    "efs_sys_id": record["HomeEfsFileSystemId"],
-                    "efs_uid": record["HomeEfsFileSystemUid"]
-                }
-                batch.put_item(Item=item)
+        table = dynamodb.Table(user_table)
+        for domain_id in domain_ids:
+            domain_metadata = get_domain_metadata(domain_id, sagemaker)
+            efs_id = domain_metadata['HomeEfsFileSystemId'] #event.get('ResourceProperties')['EFS_ID']
+            domain_name = domain_metadata['DomainName']
+            users = list_profiles(domain_id, sagemaker)
+            logger.info(f"domain {domain_name} {domain_id} has users {users}")
+            spaces = list_spaces(domain_id, sagemaker)
+            logger.info(f"domain {domain_name} {domain_id} has spaces {spaces}")
+            data = get_all_users_metadata(domain_id, efs_id, users, sagemaker)
+            data += get_all_spaces_metadata(domain_id, efs_id, spaces, sagemaker)
+            logger.info(f"update table {user_table} with data: {data}")
+            with table.batch_writer() as batch:
+                # put in a batch
+                for record in data:
+                    item = {
+                        os.getenv('HASHKEY_HIST'): record.get("UserProfileName", "")+record.get("SpaceName", ""), #either UserProfileName or SpaceName is empty string
+                        "replication": True,
+                        "role_name": record.get("ExecutionRole"),
+                        "user_profile_name": record.get("UserProfileName"),
+                        "space_name": record.get("SpaceName"),
+                        "domain_id": record.get("DomainId"),
+                        "domain_name": domain_name,
+                        "efs_sys_id": record.get("HomeEfsFileSystemId"),
+                        "efs_uid": record.get("HomeEfsFileSystemUid")
+                    }
+                    batch.put_item(Item=item)
+            logger.info(f"update history table {user_hist_table}")
+            with hist_table.batch_writer() as batch:
+                # put in a batch
+                for record in data:
+                    item = {
+                        os.getenv('HASHKEY_HIST'): record.get("UserProfileName", "")+record.get("SpaceName", ""), #either UserProfileName or SpaceName is empty string
+                        os.getenv('RANGEKEY_HIST'): int(time.time() * 1000),
+                        "replication": True,
+                        "role_name": record.get("ExecutionRole"),
+                        "user_profile_name": record.get("UserProfileName"),
+                        "space_name": record.get("SpaceName"),
+                        "domain_id": record.get("DomainId"),
+                        "domain_name": domain_name,
+                        "efs_sys_id": record.get("HomeEfsFileSystemId"),
+                        "efs_uid": record.get("HomeEfsFileSystemUid")
+                    }
+                    batch.put_item(Item=item)
         cfnresponse.send(
             event,
             context,
@@ -149,36 +205,3 @@ def lambda_handler(event, context):
         return
     return
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    # parser.add_argument(
-    #     "-domain-id",
-    #     "--domain-id",
-    #     dest="domain_id",
-    #     type=str,
-    #     default="d-7lcx8wozqren"
-    # )
-    parser.add_argument(
-        "-region",
-        "--region",
-        dest="region",
-        type=str,
-        default='us-east-2'
-    )
-    # parser.add_argument(
-    #     "-efs-id",
-    #     "--efs-id",
-    #     dest="efs_id",
-    #     type=str,
-    #     default='fs-04bc5fa34400736eb'
-    # )
-
-    args = parser.parse_args()
-    event = {
-        "ResourceProperties": {
-        # "DOMAIN_ID": args.domain_id,
-        # "EFS_ID": args.efs_id
-        }
-    }
-    os.environ['AWS_DEFAULT_REGION'] = args.region
-    lambda_handler(event, {})

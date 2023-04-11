@@ -1,0 +1,219 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: AWS CloudFormation Template for SageMaker UserProfile
+
+Parameters:
+  LambdaLayerArn:
+    Description: Lambda Layer Arn
+    Type: String
+  StudioSpaceName:
+    Description: Studio space name
+    Type: String
+    Default: space-test
+  SageMakerDomainId:
+    Description: SageMaker Studio Domain Id
+    Type: AWS::SSM::Parameter::Value<String>
+    ConstraintDescription: must be an existing studio domain id in the account.
+    Default: /app/sagemaker/domainid
+  ############### Tagging Parameters ####################
+  UID:
+    Type: String
+    Description: Universal Identifier
+    MinLength: 3
+    MaxLength: 10
+    Default: demo
+  Env:
+    Type: String
+    Description: Env instance of the resource
+    AllowedValues:
+      - dev
+      - qa
+      - prd
+    Default: dev
+  AppName:
+    Type: String
+    MaxLength: 25
+    MinLength: 3
+    AllowedPattern: "[a-z][a-z0-9+-=._:/@]*[a-z0-9]"
+    ConstraintDescription: Must begin with a lowercase letter and contain only lowercase alphanumeric characters with +-=._:/@
+    Description: Name of the application, keep to 15 characters or less
+    Default: test-app
+
+Transform: AWS::Serverless-2016-10-31
+Resources:
+  ############### IAM ####################
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /service-role/
+      RoleName: !Sub '${UID}-${AppName}-${Env}--lambda-${StudioSpaceName}-role'
+      ManagedPolicyArns:
+        - !Ref LambdaExecPolicy
+      Tags:
+        - Key: name
+          Value: !Sub "${UID}-${AppName}-${Env}-lambda-${StudioSpaceName}-role"
+        - Key: uid
+          Value: !Ref UID
+        - Key: env
+          Value: !Ref Env
+        - Key: appname
+          Value: !Ref AppName
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: "specifying a name for IAM managed policy without update with interruption is allowed"
+  LambdaExecPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: "specifying a name for IAM managed policy without update with interruption is allowed"
+    Properties:
+      ManagedPolicyName: !Sub "${UID}-${AppName}-${Env}-lambda-${StudioSpaceName}-policy"
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: SagemakerListDescribe
+            Effect: Allow
+            Action:
+              - sagemaker:List*
+              - sagemaker:Describe*
+            Resource: !Sub 'arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:*'
+          - Sid: SagemakerApp
+            Effect: Allow
+            Action:
+              - sagemaker:CreateApp
+              - sagemaker:DeleteApp
+              - servicecatalog:AssociatePrincipalWithPortfolio
+              - sagemaker:DescribeDomain
+            Resource:
+              - !Sub 'arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:domain/*'
+              - !Sub 'arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:app/*'
+              - !Sub 'arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:portfolio/*'
+          - Sid: ServiceCatalog
+            Effect: Allow
+            Action:
+              - servicecatalog:ListAcceptedPortfolioShares
+              - sagemaker:EnableSagemakerServicecatalogPortfolio
+              - servicecatalog:AcceptPortfolioShare
+            Resource: '*'
+          - Sid: Logs
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:DescribeLogStreams
+              - logs:GetLogEvents
+              - logs:PutLogEvents
+            Resource: '*'
+          - Sid: CloudWatch
+            Effect: Allow
+            Action:
+              - cloudwatch:GetMetricData
+              - cloudwatch:GetMetricStatistics
+              - cloudwatch:ListMetrics
+              - cloudwatch:PutMetricData
+            Resource: !Sub 'arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:*'
+          - Sid: EC2
+            Effect: Allow
+            Action:
+              - ec2:Describe*
+              - ec2:CreateNetwork*
+              - ec2:DeleteNetwork*
+              - ec2:AttachNetwork*
+            Resource: '*'
+          - Sid: IAM
+            Effect: Allow
+            Action:
+              - iam:GetRole
+              - iam:PassRole
+            Resource: !Sub 'arn:*:iam::${AWS::AccountId}:role/*'
+          - Sid: KMSKeyAccess
+            Effect: Allow
+            Action:
+              - kms:CreateGrant
+              - kms:Decrypt
+              - kms:DescribeKey
+              - kms:Encrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:ListAliases
+            Resource: arn:aws:kms:*
+            Condition: {
+              "StringLike": {
+                "kms:RequestAlias": !Sub "alias/${UID}*"
+              }
+            }
+  ############### SageMaker Space ####################
+  SageMakerStudioSpace:
+    Type: AWS::SageMaker::Space
+    Properties:
+      DomainId: !Ref SageMakerDomainId
+      SpaceName: !Ref StudioSpaceName
+      Tags:
+        - Key: name
+          Value: !Ref StudioSpaceName
+        - Key: uid
+          Value: !Ref UID
+        - Key: env
+          Value: !Ref Env
+        - Key: Appname
+          Value: !Ref AppName
+#  JupyterApp:
+#    Type: AWS::SageMaker::App
+#    DependsOn: SageMakerStudioSpace
+#    Properties:
+#      AppName: default
+#      AppType: JupyterServer
+#      DomainId: !Ref SageMakerDomainId
+#      SpaceName: !Ref StudioSpaceName
+#      Tags:
+#        - Key: name
+#          Value: !Ref StudioSpaceName
+#        - Key: uid
+#          Value: !Ref UID
+#        - Key: env
+#          Value: !Ref Env
+#        - Key: appname
+#          Value: !Ref AppName
+  AppsSpace:
+    Type: Custom::AppsSpace
+    DependsOn: SageMakerStudioSpace
+    Properties:
+      ServiceToken: !GetAtt AppsSpaceLambda.Arn
+      DomainId: !Ref SageMakerDomainId
+      SpaceName: !Ref StudioSpaceName
+  AppsSpaceLambda:
+    Type: AWS::Serverless::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W58
+            reason: "lambda role arn referened in the resource has permission to write CloudWatch Logs"
+    Properties:
+      FunctionName: !Sub '${UID}-${AppName}-${Env}-${StudioSpaceName}-apps-space'
+      ReservedConcurrentExecutions: 1
+      CodeUri: ../../src/
+      Description: create or delete apps to clean up
+      Handler: app-space.lambda_handler
+      MemorySize: 128
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.9
+      Layers:
+        - !Ref LambdaLayerArn
+      Timeout: 900
+      Tags:
+          name: !Sub '${UID}-${AppName}-${Env}-${StudioSpaceName}-apps-space'
+          uid: !Ref UID
+          env: !Ref Env
+          appname: !Ref AppName

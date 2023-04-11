@@ -107,6 +107,18 @@ Resources:
             Action:
               - elasticfilesystem:Describe*
             Resource: '*'
+          - Sid: DynamoDBQuery
+            Effect: Allow
+            Action:
+              - dynamodb:DescribeTable
+              - dynamodb:Query
+              - dynamodb:Scan
+              - dynamodb:Update*
+              - dynamodb:Put*
+              - dynamodb:Get*
+              - dynamodb:Batch*
+            Resource:
+              - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/*'
   Role:
     Type: AWS::IAM::Role
     Metadata:
@@ -145,8 +157,57 @@ Resources:
       DefinitionString: !Sub |
         {
           "Comment": "A description of my state machine",
-          "StartAt": "ListApps",
+          "StartAt": "IsUserFileSystem",
           "States": {
+            "IsUserFileSystem": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.Target.SpaceName",
+                  "IsPresent": true,
+                  "Next": "ListAppsForSpace"
+                }
+              ],
+              "Default": "ListApps"
+            },
+            "ListAppsForSpace": {
+              "Type": "Task",
+              "Parameters": {
+                "DomainIdEquals.$": "$.Target.DomainID",
+                "MaxResults": 1,
+                "SpaceNameEquals.$": "$.Target.SpaceName"
+              },
+              "Resource": "arn:aws:states:::aws-sdk:sagemaker:listApps",
+              "Next": "LengthZeroSpace",
+              "ResultSelector": {
+                "Length.$": "States.ArrayLength($.Apps)",
+                "Apps.$": "$.Apps"
+              },
+              "ResultPath": "$.ListApps"
+            },
+            "LengthZeroSpace": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.ListApps.Length",
+                  "NumericEquals": 0,
+                  "Next": "Wait-App-Space"
+                },
+                {
+                  "Not": {
+                    "Variable": "$.ListApps.Apps[0].Status",
+                    "StringEquals": "InService"
+                  },
+                  "Next": "Wait-App-Space"
+                }
+              ],
+              "Default": "CreateLocationEfsSource"
+            },
+            "Wait-App-Space": {
+              "Type": "Wait",
+              "Seconds": 300,
+              "Next": "ListAppsForSpace"
+            },
             "ListApps": {
               "Type": "Task",
               "Next": "Length_Zero",
@@ -166,7 +227,8 @@ Resources:
                 }
               ],
               "ResultSelector": {
-                "Length.$": "States.ArrayLength($.Apps)"
+                "Length.$": "States.ArrayLength($.Apps)",
+                "Apps.$": "$.Apps"
               }
             },
             "Wait-Apps": {
@@ -180,6 +242,13 @@ Resources:
                 {
                   "Variable": "$.ListApps.Length",
                   "NumericEquals": 0,
+                  "Next": "Wait-Apps"
+                },
+                {
+                  "Not": {
+                    "Variable": "$.ListApps.Apps[0].Status",
+                    "StringEquals": "InService"
+                  },
                   "Next": "Wait-Apps"
                 }
               ],
@@ -206,7 +275,18 @@ Resources:
                   "Next": "SQS SendMessage"
                 }
               ],
-              "ResultPath": "$.Source.CreateLocationResult"
+              "ResultPath": "$.Source.CreateLocationResult",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "DataSync.DataSyncException"
+                  ],
+                  "BackoffRate": 2,
+                  "IntervalSeconds": 10,
+                  "MaxAttempts": 100,
+                  "Comment": "DataSync CreateLocation Retry"
+                }
+              ]
             },
             "CreateLocationEfsTarget": {
               "Type": "Task",
@@ -228,7 +308,18 @@ Resources:
                   "Next": "SQS SendMessage"
                 }
               ],
-              "ResultPath": "$.Target.CreateLocationResult"
+              "ResultPath": "$.Target.CreateLocationResult",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "DataSync.DataSyncException"
+                  ],
+                  "BackoffRate": 2,
+                  "IntervalSeconds": 10,
+                  "MaxAttempts": 100,
+                  "Comment": "DataSync CreateLocation Retry"
+                }
+              ]
             },
             "CreateTask": {
               "Type": "Task",
@@ -248,7 +339,18 @@ Resources:
                   "Next": "SQS SendMessage"
                 }
               ],
-              "ResultPath": "$.Task"
+              "ResultPath": "$.Task",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "DataSync.DataSyncException"
+                  ],
+                  "BackoffRate": 2,
+                  "IntervalSeconds": 10,
+                  "MaxAttempts": 100,
+                  "Comment": "DataSync CreateTask Exception"
+                }
+              ]
             },
             "StartTaskExecution": {
               "Type": "Task",
@@ -317,7 +419,47 @@ Resources:
                   "Next": "SQS SendMessage"
                 }
               ],
-              "Default": "Success"
+              "Default": "DynamoDB UpdateItem"
+            },
+            "DynamoDB UpdateItem": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:updateItem",
+              "Parameters": {
+                "TableName": "studioUser",
+                "Key": {
+                  "profile_name": {
+                    "S.$": "$.Target.UserProfileName"
+                  },
+                  "domain_name": {
+                    "S.$": "$.Target.DomainName"
+                  }
+                },
+                "UpdateExpression": "set bytes_written =:b, files_transferred =:f, total_duration_ms =:t, replication_status =:rs",
+                "ExpressionAttributeValues": {
+                  ":b": {
+                    "S.$": "States.Format('{}',$.Result.BytesWritten)"
+                  },
+                  ":f": {
+                    "S.$": "States.Format('{}',$.Result.FilesTransferred)"
+                  },
+                  ":t": {
+                    "S.$": "States.Format('{}',$.Result.Result.TotalDuration)"
+                  },
+                  ":rs": {
+                    "S.$": "States.Format('{}',$.Result.Result.TransferStatus)"
+                  }
+                }
+              },
+              "Next": "Success",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "Next": "SQS SendMessage"
+                }
+              ],
+              "ResultPath": "$.DDBUpdateResult"
             },
             "SQS SendMessage": {
               "Type": "Task",

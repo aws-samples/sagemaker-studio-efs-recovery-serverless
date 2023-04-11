@@ -44,10 +44,23 @@ while getopts 'n:v:s:b:r:dh' OPTION; do
 done
 shift "$((OPTIND-1))"
 DOMAIN_SKIP=${DOMAIN_SKIP:-0}
+echo "#####################################################"
+echo "Build a boto 3 as a Lambda layer"
+echo "#####################################################"
+LIB_DIR=tmp/python
+LAMBDA_LAYER_NAME="boto3-layer"
+mkdir -p $LIB_DIR
+pip3 install boto3==1.26.59 -t $LIB_DIR
+cd tmp
+zip -r $LAMBDA_LAYER_NAME.zip .
+rm -r ../$LIB_DIR
+cd ..
+echo "#####################################################"
+echo "Built and Deploy"
+echo "#####################################################"
 sam build
 if [[ "$DOMAIN_SKIP" -eq 0 ]]; then
   sam deploy \
-        --disable-rollback \
         --region ${AWS_REGION} \
         --stack-name ${NAME} \
         --s3-bucket ${ARTIFACT_BUCKET} \
@@ -57,7 +70,6 @@ if [[ "$DOMAIN_SKIP" -eq 0 ]]; then
 else
   echo '[Warning] Skip Sagemaker Domain Deployment'
   sam deploy \
-        --disable-rollback \
         --region ${AWS_REGION} \
         --stack-name ${NAME} \
         --s3-bucket ${ARTIFACT_BUCKET} \

@@ -41,7 +41,9 @@ class UsersHistory:
             logger.error(
                 f"Could not get user: {e.response['Error']['Code']}:{e.response['Error']['Message']}")
             raise
-        return response['Item']
+        if 'Item' in response:
+            return response['Item']
+        return {}
 
     def query(self, attribute: string) -> Mapping:
         try:

@@ -36,6 +36,11 @@ Parameters:
       - DISABLED
       - ENABLED
     Default: DISABLED
+  ############### Sagemaker ####################
+  StudioSpaceName:
+    Description: Studio space name
+    Type: String
+    Default: space-test
   StudioUserProfileName1:
     Description: Studio user1 profile name
     Type: String
@@ -44,6 +49,11 @@ Parameters:
     Description: Studio user1 profile name
     Type: String
     Default: user2
+  ############### Lambda Layer Name ####################
+  LambdaLayerName:
+    Description: Lambda Layer Name
+    Type: String
+    Default: "boto3-layer"
   ############### Tagging Parameters ####################
   UID:
     Type: String
@@ -69,7 +79,7 @@ Parameters:
     Default: myapp
 
 Conditions:
-  CreateDomainCond: !Equals [ !Ref MODE, 'NOSEED']
+  CreateDomainCond: !Equals [ !Ref MODE, 'NOSEED' ]
 
 # Create our resources with separate CloudFormation templates resources:
 Resources:
@@ -80,6 +90,7 @@ Resources:
       Parameters:
         VpcId: !Ref VpcId
         SubnetId1: !Ref SubnetId1
+        LambdaLayerName: !Ref LambdaLayerName
         UID: !Ref UID
         Env: !Ref Env
         AppName: !Ref AppName
@@ -101,6 +112,7 @@ Resources:
       Location: Infrastructure/Templates/event-app.yaml
       Parameters:
         DDBInitialSeed: !Ref DDBInitialSeed
+        LambdaLayerArn: !GetAtt DemoBootstrap.Outputs.LambdaLayerArn
         UID: !Ref UID
         Env: !Ref Env
         AppName: !Ref AppName
@@ -111,6 +123,7 @@ Resources:
     Properties:
       Location: Infrastructure/Templates/sagemaker-studio-domain.yaml
       Parameters:
+        LambdaLayerArn: !GetAtt DemoBootstrap.Outputs.LambdaLayerArn
         UID: !Ref UID
         Env: !Ref Env
         AppName: !Ref AppName
@@ -121,18 +134,20 @@ Resources:
     Properties:
       Location: Infrastructure/Templates/sagemaker-studio-user.yaml
       Parameters:
+        LambdaLayerArn: !GetAtt DemoBootstrap.Outputs.LambdaLayerArn
         StudioUserProfileName: !Ref StudioUserProfileName1
         UID: !Ref UID
         Env: !Ref Env
         AppName: !Ref AppName
-  StudioUser2:
+  StudioSpace:
     Type: AWS::Serverless::Application
     Condition: CreateDomainCond
     DependsOn: StudioDomain
     Properties:
-      Location: Infrastructure/Templates/sagemaker-studio-user.yaml
+      Location: Infrastructure/Templates/sagemaker-studio-space.yaml
       Parameters:
-        StudioUserProfileName: !Ref StudioUserProfileName2
+        LambdaLayerArn: !GetAtt DemoBootstrap.Outputs.LambdaLayerArn
+        StudioSpaceName: !Ref StudioSpaceName
         UID: !Ref UID
         Env: !Ref Env
         AppName: !Ref AppName

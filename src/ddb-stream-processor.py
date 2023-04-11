@@ -49,21 +49,36 @@ def lambda_handler(event, context):
 
     account = boto3.client('sts').get_caller_identity().get('Account')
     region = event['awsRegion']
+    replication_flag = event['dynamodb']['OldImage']['replication'].get('BOOL')
     domain_id = event['dynamodb']['NewImage']['domain_id'].get('S')
-    profile_name = event['dynamodb']['NewImage'][os.getenv('HASHKEY', 'username')].get('S')
-    role_name = event['dynamodb']['NewImage'][os.getenv('RANGEKEY', 'role_name')].get('S')
+    domain_name = event['dynamodb']['NewImage']['domain_name'].get('S')
+    profile_name = event['dynamodb']['NewImage']['profile_name'].get('S')
+    user_profile_name = event['dynamodb']['NewImage']['user_profile_name'].get('S')
+    space_name = event['dynamodb']['NewImage']['space_name'].get('S')
+    role_name = event['dynamodb']['NewImage']['role_name'].get('S')
     target_efs = event['dynamodb']['NewImage']['efs_sys_id'].get('S')
     target_mount = event['dynamodb']['NewImage']['efs_uid'].get('S')
-
     source_efs = event['dynamodb']['OldImage']['efs_sys_id'].get('S')
     source_mount = event['dynamodb']['OldImage']['efs_uid'].get('S')
 
-    profile = p.Profile(
-        domain_id=domain_id,
-        sm_client=boto3.client('sagemaker'),
-        profile_name=profile_name,
-        role_name=role_name
-    )
+    if not(replication_flag):
+        logger.info(f"replication flag set to {replication_flag} for profile {profile_name}. skip replication")
+        return
+    if user_profile_name:
+        logger.info(f"build user profile metadata: {user_profile_name}")
+        profile = p.Profile(
+            domain_id=domain_id,
+            sm_client=boto3.client('sagemaker'),
+            profile_name=user_profile_name,
+            role_name=role_name
+        )
+    elif space_name:
+        logger.info(f"build space metadata: {space_name}")
+        profile = p.Profile(
+            domain_id=domain_id,
+            sm_client=boto3.client('sagemaker'),
+            space_name=space_name
+        )
     if profile.error:
         '''
         If DynamoDB Streams triggers Lambda function and Lambda function fails, 
@@ -73,6 +88,7 @@ def lambda_handler(event, context):
         return
 
     logger.info(f"""Built profile: user {profile.name}\
+    space_name {profile.space}\
     role_name {profile.role}\
     domain_id {profile.domain_id}\
     home_efs_id {profile.efs_sys_id}\
@@ -93,29 +109,48 @@ def lambda_handler(event, context):
 
     options = {"Gid": 'NONE', "LogLevel": "TRANSFER", "OverwriteMode": "ALWAYS", "PosixPermissions": "NONE", "TransferMode": "CHANGED", "Uid": "NONE"}
     logger.debug(f"datasync task option setting: {options}")
+    source_domain_id = event['dynamodb']['OldImage']['domain_id'].get('S')
+    source_domain_name = event['dynamodb']['OldImage']['domain_name'].get('S')
+    source_profile_name = event['dynamodb']['OldImage']['profile_name'].get('S')
+    source_user_profile_name = event['dynamodb']['OldImage']['user_profile_name'].get('S')
+    source_space_name = event['dynamodb']['OldImage']['space_name'].get('S')
+    source_mount = event['dynamodb']['OldImage']['efs_uid'].get('S')
+
+    ## logic to skip the same EFS Volume and Directory replication in case of table update for other purpose (ex. replication switch)
+    if (source_efs == target_efs) and (source_mount == target_mount):
+        logging.warning(f"Source EFS Volume and Directory UID cannot be the same. skip profile {profile_name}")
+        return
     input = {
         "Options": options,
         "Log": {
             "CloudWatchLogGroupArn": f"arn:aws:logs:{region}:{account}:log-group:/aws/datasync:*"
         },
         "Source": {
-            "DomainID": event['dynamodb']['OldImage']['domain_id'].get('S'),
-            "UserProfileName": event['dynamodb']['OldImage'][os.getenv('HASHKEY', 'username')].get('S'),
+            "DomainID": source_domain_id,
+            "DomainName": source_domain_name,
             "EfsFilesystemArn": f"arn:aws:elasticfilesystem:{region}:{account}:file-system/{source_efs}",
             "HomeEfsFileSystemUid": source_mount,
             "SubnetArn": f"arn:aws:ec2:{region}:{account}:subnet/{params['SUBNET1']}",
-            "SecurityGroupArns": [f"arn:aws:ec2:{region}:{account}:security-group/{sg}" for sg in params['SOURCE_SECURITY_GROUP'].split(",")
+            "SecurityGroupArns": [f"arn:aws:ec2:{region}:{account}:security-group/{sg}" for sg in
+                                  params['SOURCE_SECURITY_GROUP'].split(",")
                                   if sg]
         },
         "Target": {
             "DomainID": event['dynamodb']['NewImage']['domain_id'].get('S'),
-            "UserProfileName": profile_name,
+            "DomainName": domain_name,
             "EfsFilesystemArn": f"arn:aws:elasticfilesystem:{region}:{account}:file-system/{target_efs}",
             "HomeEfsFileSystemUid": target_mount,
             "SubnetArn": f"arn:aws:ec2:{region}:{account}:subnet/{params['SUBNET1']}",
-            "SecurityGroupArns": [f"arn:aws:ec2:{region}:{account}:security-group/{sg}" for sg in params['TARGET_SECURITY_GROUP'].split(",")
+            "SecurityGroupArns": [f"arn:aws:ec2:{region}:{account}:security-group/{sg}" for sg in
+                                  params['TARGET_SECURITY_GROUP'].split(",")
                                   if sg]
         }}
+    if space_name:
+        input["Source"]["SpaceName"] = source_space_name
+        input["Target"]["SpaceName"] = space_name
+    elif user_profile_name:
+        input["Source"]["UserProfileName"] = source_user_profile_name
+        input["Target"]["UserProfileName"] = user_profile_name
     step_function_name = params['STEPFUNCTION'].rsplit(':')[-1]
     logger.info(f"invoke stepfunction {params['STEPFUNCTION'].rsplit(':')[-1]} with input {input}")
     response = start_execution(
@@ -132,36 +167,31 @@ if __name__ == "__main__":
         "-domain-id",
         "--domain-id",
         dest="domain_id",
-        type=str,
-        default="d-ejqunbmsecvq"
+        type=str
     )
     parser.add_argument(
         "-profile-name",
         "--profile-name",
         dest="profile_name",
-        type=str,
-        default='user1'
+        type=str
     )
     parser.add_argument(
         "-role-name",
         "--role-name",
         dest="role_name",
-        type=str,
-        default='demo-myapp-dev-sagemaker-user1-role'
+        type=str
     )
     parser.add_argument(
         "-region",
         "--region",
         dest="region",
-        type=str,
-        default='us-east-2'
+        type=str
     )
     parser.add_argument(
         "-efs-sys-id",
         "--efs-sys-id",
         dest="efs_sys_id",
-        type=str,
-        default='fs-012047b432ec90e24'
+        type=str
     )
     args = parser.parse_args()
     event = {'Records': [{

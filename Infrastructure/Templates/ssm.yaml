@@ -10,6 +10,11 @@ Parameters:
     Description: SubnetId1 of an existing subnet in the VPC
     Type: String
     ConstraintDescription: must be an existing subnets in the VPC.
+  ############### Lambda Layer Name ####################
+  LambdaLayerName:
+    Description: Lambda Layer Name
+    Type: String
+    Default: "boto3-layer"
   ############### Tagging Parameters ####################
   UID:
     Type: String
@@ -33,6 +38,7 @@ Parameters:
     ConstraintDescription: Must begin with a lowercase letter and contain only lowercase alphanumeric characters with +-=._:/@
     Description: Name of the application, keep to 15 characters or less
     Default: test-app
+
 Resources:
   ############### VPC ####################
   SageMakerSecurityGroup:
@@ -96,18 +102,25 @@ Resources:
       Type: String
       Value: !Ref SageMakerSecurityGroup
       Description: SageMakerSecurityGroup
-#  LambdaSecurityGroupSSM:
-#    Type: AWS::SSM::Parameter
+  ############### Lambda Layer ####################
+  LambdaLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      CompatibleRuntimes:
+        - python3.9
+      Content: ../../tmp/boto3-layer.zip
+      Description: String
+      LayerName: !Ref LambdaLayerName
+#    Type: AWS::Serverless::LayerVersion
 #    Properties:
-#      Name: /network/vpc/lambda/securitygroups
-#      Type: String
-#      Value: !GetAtt LambdaSecurityGroup.GroupId
-#      Description: Security Group ID for the Lambda Resources
-
+#      LayerName: boto3-layer
+#      Description: Boto3 version dependencies for SageMaker Space
+#      ContentUri: ../../tmp/boto3-layer.zip
+#      CompatibleRuntimes: python3.9
 ############### Output ####################
-#Outputs:
-#  LambdaLayerArn:
-#    Value: !Ref LambdaLayer
-#    Description: Lambda Layer Arn
-#    Export:
-#      Name: !Sub "${UID}-${AppName}-${Env}-lambda-layer"
+Outputs:
+  LambdaLayerArn:
+    Value: !Ref LambdaLayer
+    Description: Lambda Layer Arn
+    Export:
+      Name: !Sub "${UID}-${AppName}-${Env}-lambda-layer"
