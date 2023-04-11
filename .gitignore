@@ -8,8 +8,8 @@
 __pycache__/
 *.py[cod]
 *$py.class
- 
- 
+tmp
+
 # Distribution / packaging
 .Python
 build/
@@ -28,8 +28,8 @@ wheels/
 .installed.cfg
 *.egg
 MANIFEST
- 
- 
+
+
 # Unit test / coverage reports
 .coverage
 .coverage.*
@@ -37,18 +37,18 @@ MANIFEST
 coverage.xml
 *.cover
 .pytest_cache/
- 
- 
+
+
 # Jupyter Notebook
 .ipynb_checkpoints
- 
+
 # IPython
 profile_default/
 ipython_config.py
- 
+
 # pyenv
 .python-version
- 
+
 # Environments
 .env
 .venv

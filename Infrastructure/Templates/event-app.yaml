@@ -2,9 +2,9 @@ AWSTemplateFormatVersion: 2010-09-09
 Description: AWS CloudFormation Template for Event-Driven App
 
 Parameters:
-#  LambdaLayerArn:
-#    Description: Lambda Layer Arn
-#    Type: String
+  LambdaLayerArn:
+    Description: Lambda Layer Arn
+    Type: String
   DDBInitialSeed:
     Description: Select ENABLED only if SageMaker Domain isn't deployed along this stack
     Type: String
@@ -40,9 +40,13 @@ Parameters:
       - s3.amazonaws.com
     Default: sagemaker.amazonaws.com
   EventName:
-    Description: Event name for Event Rule
+    Description: Event name 1 for Event Rule
     Type: String
     Default: CreateUserProfile
+  EventName2:
+    Description: Event name 2 for Event Rule
+    Type: String
+    Default: CreateSpace
   SubnetId1:
     Description: SubnetId1 of an existing subnet in the VPC
     Type: AWS::SSM::Parameter::Value<String>
@@ -70,7 +74,7 @@ Parameters:
     MinLength: '1'
     MaxLength: '100'
     ConstraintDescription: must contain only letters with -_
-    Default: username
+    Default: profile_name
   HashKeyElementType:
     Description: HashType PrimaryKey Type
     Type: String
@@ -86,7 +90,7 @@ Parameters:
     MinLength: '1'
     MaxLength: '100'
     ConstraintDescription: must contain only letters with -_
-    Default: role_name
+    Default: domain_name
   RangeKeyElementType:
     Description: Range Key Type
     Type: String
@@ -156,7 +160,7 @@ Conditions:
   DDBInitialSeedCond: !Equals [ !Ref DDBInitialSeed, 'ENABLED']
 Transform: AWS::Serverless-2016-10-31
 Resources:
-  ############### Event Rule ####################
+  ############### Event Rule (Create UserProfile) ####################
   CloudWatchEventRule:
       Type: AWS::Events::Rule
       Properties:
@@ -173,6 +177,7 @@ Resources:
               - !Ref EventSource
             eventName:
               - !Ref EventName
+              - !Ref EventName2
         Targets:
           - Arn: !GetAtt EventProcessorLambda.Arn
             Id: event-rule-processor
@@ -459,7 +464,6 @@ Resources:
             reason: "lambda role arn referened in the resource has permission to write CloudWatch Logs"
     Properties:
       FunctionName: !Sub '${UID}-${AppName}-${Env}-event-processor'
-#      CodeUri: ../../src/event-processor
       CodeUri: ../../src/
       Description: Event processor triggered by Event Rule
       Handler: event-processor.lambda_handler
@@ -474,8 +478,8 @@ Resources:
           HASHKEY_HIST: !Ref HashKeyElementName
           RANGEKEY_HIST: !Ref RangeKeyHistoryTable
       Runtime: python3.9
-#      Layers:
-#        - !Ref LambdaLayerArn
+      Layers:
+        - !Ref LambdaLayerArn
       Timeout: 300
       ReservedConcurrentExecutions: 1
       Tags:
@@ -495,8 +499,8 @@ Resources:
       Description: An AWS Lambda trigger to process a stream from a DynamoDB table
       Handler: ddb-stream-processor.lambda_handler
       Runtime: python3.9
-#      Layers:
-#        - !Ref LambdaLayerArn
+      Layers:
+        - !Ref LambdaLayerArn
       CodeUri: ../../src/
       Environment:
         Variables:
@@ -522,7 +526,7 @@ Resources:
       Enabled: True
       EventSourceArn: !GetAtt UserTable.StreamArn
       FunctionName: !GetAtt DDBStreamProcessor.Arn
-      StartingPosition: TRIM_HORIZON #Preserv ordering
+      StartingPosition: LATEST #TRIM_HORIZON #Preserv ordering
   ############### Custom Resource ####################
   DDBSeed:
     Type: Custom::DDBSeedApp
@@ -540,7 +544,6 @@ Resources:
             reason: "lambda role arn referened in the resource has permission to write CloudWatch Logs"
     Properties:
       FunctionName: !Sub '${UID}-${AppName}-${Env}-initial-seed-processor'
-#      CodeUri: ../../src/seed-table
       CodeUri: ../../src/
       Description: DDB Inital Seed for Existing Studio Users
       Handler: seed-table.lambda_handler
@@ -555,8 +558,8 @@ Resources:
           HASHKEY_HIST: !Ref HashKeyElementName
           RANGEKEY_HIST: !Ref RangeKeyHistoryTable
       Runtime: python3.9
-#      Layers:
-#        - !Ref LambdaLayerArn
+      Layers:
+        - !Ref LambdaLayerArn
       Timeout: 300
       ReservedConcurrentExecutions: 1
       Tags:

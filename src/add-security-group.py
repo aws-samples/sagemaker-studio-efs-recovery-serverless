@@ -97,7 +97,7 @@ def lambda_handler(event, context):
             reason=str(e)
         )
         return
-    return
+    return True
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -105,8 +105,7 @@ if __name__ == "__main__":
         "-domain-id",
         "--domain-id",
         dest="domain_id",
-        type=str,
-        default="d-ozw90syuk8in"
+        type=str
     )
     parser.add_argument(
         "-region",
@@ -119,15 +118,13 @@ if __name__ == "__main__":
         "-efs-id",
         "--efs-id",
         dest="efs_id",
-        type=str,
-        default='fs-012047b432ec90e24'
+        type=str
     )
     parser.add_argument(
         "-security-groups",
         "--security-groups",
         dest="security_groups",
-        type=str,
-        default='sg-0c0f59cdc6f9eedd7,'
+        type=str
     )
     args = parser.parse_args()
     args.is_debug = True

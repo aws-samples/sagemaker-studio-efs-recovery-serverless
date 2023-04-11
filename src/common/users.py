@@ -49,7 +49,9 @@ class Users:
             logger.error(
                 f"Could not get user: {e.response['Error']['Code']}:{e.response['Error']['Message']}")
             raise
-        return response['Item']
+        if 'Item' in response:
+            return response['Item']
+        return {}
 
 def run_question(ddb_resource, table_name, key):
     print('-' * 50)
@@ -82,7 +84,7 @@ if __name__ == '__main__':
         "--key",
         dest="key",
         type=str,
-        description='{"user": <studio user profile name>, "role_name": <sagemaker notebook execution role name>}'
+        description='{"domain_name": <studio domain name>, "profile_name": <sagemaker profile name>}'
     )
     args = parser.parse_args()
     run_question(

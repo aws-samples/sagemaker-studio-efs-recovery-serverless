@@ -17,21 +17,36 @@ def lambda_handler(event, context):
         raise ValueError(f"Invalid event format: {event}")
     event = json.loads(json.dumps(event['detail']))
     logger.info(f"event detail: {event}")
-    domain_id = event['requestParameters']['domainId']
-    profile_name = event['requestParameters']['userProfileName']
-    role_name = event['requestParameters']['userSettings']['executionRole'].rsplit("/")[-1]
-    logger.info(f"Create UserProfile event detected with domain {domain_id} userprofile {profile_name} role {role_name}")
-    profile = p.Profile(
-        domain_id=domain_id,
-        sm_client=boto3.client('sagemaker'),
-        profile_name=profile_name,
-        role_name=role_name
-    )
-    logger.info(f"""Built profile: user {profile.name}\
-    role_name {profile.role}\
-    domain_id {profile.domain_id}\
-    home_efs_id {profile.efs_sys_id}\
-    efs_uid {profile.efs_uid}""")
+    domain_id = event.get('requestParameters')['domainId']
+    profile_name = event.get('requestParameters').get('userProfileName')
+    space_name = event.get('requestParameters').get('spaceName')
+    if profile_name:
+        role_name = event.get('requestParameters').get('userSettings')['executionRole'].rsplit("/")[-1]
+        logger.info(f"Create UserProfile event detected with domain {domain_id} userprofile {profile_name} role {role_name}")
+        profile = p.Profile(
+            domain_id=domain_id,
+            sm_client=boto3.client('sagemaker'),
+            profile_name=profile_name,
+            role_name=role_name
+        )
+        logger.info(f"""Built profile: user {profile.name}\
+        role_name {profile.role}\
+        domain_id {profile.domain_id}\
+        home_efs_id {profile.efs_sys_id}\
+        efs_uid {profile.efs_uid}""")
+    elif space_name:
+        role_name = ""
+        logger.info(f"Create Space event detected with domain {domain_id} space {space_name}")
+        profile = p.Profile(
+            domain_id=domain_id,
+            sm_client=boto3.client('sagemaker'),
+            space_name=space_name
+        )
+        logger.info(f"""Built profile: space {profile.space}\
+        role_name {profile.role}\
+        domain_id {profile.domain_id}\
+        home_efs_id {profile.efs_sys_id}\
+        efs_uid {profile.efs_uid}""")
     users = u.Users(
         ddb_resource=boto3.resource('dynamodb'),
         table_name=os.getenv('USERTABLE', 'studioUser')
@@ -43,12 +58,16 @@ def lambda_handler(event, context):
     logger.info(f"update table {users.table.name}")
     response = users.update_user(
         key={
-            os.getenv('HASHKEY', 'username'): profile_name,
-            os.getenv('RANGEKEY', 'role_name'): role_name
+            os.getenv('HASHKEY', "profile_name"): profile.name + profile.space, #either one is empty string,
+            os.getenv('RANGEKEY', "domain_name"): profile.domain_name
         },
-        expression="set domain_id = :d, efs_sys_id =:es, efs_uid = :eu",
+        expression="set replication = :rp, domain_id = :d, user_profile_name = :upn, space_name = :s, efs_sys_id =:es, efs_uid = :eu, role_name =:rn",
         attributes={
+            ":rp": True,
+            ":rn": profile.role,
             ":d": domain_id,
+            ":upn": profile.name,
+            ":s": profile.space,
             ":es": profile.efs_sys_id,
             ":eu": profile.efs_uid
         },
@@ -58,10 +77,14 @@ def lambda_handler(event, context):
     logger.info(f"append to table {users_hist.table.name}")
     users_hist.put_user(
         item={
-            os.getenv('HASHKEY_HIST', 'username'): profile_name,
+            os.getenv('HASHKEY_HIST', 'profile_name'): profile.name + profile.space, #either one is empty string
             os.getenv('RANGEKEY_HIST', 'epoctime'): int(time.time() * 1000),
-            "role_name": role_name,
+            "replication": True,
+            "role_name": profile.role,
             "domain_id": domain_id,
+            "domain_name": profile.domain_name,
+            "user_profile_name": profile.name,
+            "space_name": profile.space,
             "efs_sys_id": profile.efs_sys_id,
             "efs_uid": profile.efs_uid}
     )
@@ -74,29 +97,25 @@ if __name__ == "__main__":
         "-domain-id",
         "--domain-id",
         dest="domain_id",
-        type=str,
-        default="d-ozw90syuk8in"
+        type=str
     )
     parser.add_argument(
         "-region",
         "--region",
         dest="region",
-        type=str,
-        default='us-east-2'
+        type=str
     )
     parser.add_argument(
         "-profile-name",
         "--profile-name",
         dest="profile_name",
-        type=str,
-        default='user1'
+        type=str
     )
     parser.add_argument(
         "-role-name",
         "--role-name",
         dest="role_name",
-        type=str,
-        default='AmazonSageMaker-ExecutionRole-endtoendml'
+        type=str
     )
     args = parser.parse_args()
     event = {
@@ -105,11 +124,12 @@ if __name__ == "__main__":
         'region': args.region,
         'detail': {
             'eventSource': 'sagemaker.amazonaws.com',
-            'eventName': 'CreateUserProfile',
+            'eventName': 'CreateSpace',
             'awsRegion': args.region,
             'requestParameters': {
                 'domainId': args.domain_id,
-                'userProfileName': args.profile_name,
+                #'userProfileName': args.profile_name,
+                'spaceName': args.space_name,
                 'userSettings': {
                     'executionRole': args.role_name
                 }
